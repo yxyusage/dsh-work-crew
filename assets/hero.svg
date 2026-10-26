@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 470" width="1200" height="470" role="img" aria-label="dsh-work-crew — one prompt, a working team">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#070b16"/>
+      <stop offset="55%" stop-color="#0b1222"/>
+      <stop offset="100%" stop-color="#0a1020"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4f7dff" stop-opacity=".9"/>
+      <stop offset="100%" stop-color="#37d39b" stop-opacity=".55"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#4f7dff" stop-opacity=".34"/>
+      <stop offset="100%" stop-color="#4f7dff" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .eyebrow { font: 600 13px -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; letter-spacing: 3.2px; fill: #7f8db3; }
+      .title { font: 700 60px -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #f2f5ff; letter-spacing: -1px; }
+      .tag { font: 400 22px -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #aab6d4; }
+      .pill { font: 600 12px -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #9fb0e0; letter-spacing: 1.4px; }
+      .cap { font: 700 12px -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #8fa0c8; letter-spacing: 1.6px; }
+      .node { font: 600 15px "Segoe UI", -apple-system, sans-serif; fill: #e7ecff; }
+      .sub { font: 400 12px "Segoe UI", -apple-system, sans-serif; fill: #8b9ab8; }
+      .task { font: 600 13px "Segoe UI", -apple-system, sans-serif; fill: #dfe6fb; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="470" rx="26" fill="url(#bg)"/>
+  <rect x="1" y="1" width="1198" height="468" rx="25" fill="none" stroke="#1c2740"/>
+  <circle cx="200" cy="190" r="210" fill="url(#glow)"/>
+
+  <text x="64" y="82" class="eyebrow">DEEPSEEK HARNESS · LOCAL MULTI-AGENT ORCHESTRATION</text>
+  <text x="64" y="164" class="title">dsh-work-crew</text>
+  <text x="64" y="208" class="tag">One prompt. A working team.</text>
+  <text x="64" y="242" class="tag" opacity=".78">一个指令。一支有纪律的本机 AI 班组。</text>
+
+  <rect x="64" y="282" width="196" height="34" rx="17" fill="#101a30" stroke="#2a3a60"/>
+  <circle cx="88" cy="299" r="5" fill="#4f7dff"/>
+  <text x="104" y="304" class="pill">ORCHESTRATOR-LED</text>
+  <text x="278" y="304" class="pill" opacity=".66">TASKS · LOCKS · HANDOFF · BOARD</text>
+
+  <g transform="translate(600,92)">
+
+    <circle cx="72" cy="112" r="40" fill="#0f1a33" stroke="#3f6bff" stroke-width="2"/>
+    <path d="M55 112 l11 11 l22 -24" fill="none" stroke="#6d8dff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="42" y="178" class="cap">DSH</text>
+
+    <path d="M112 112 C 160 112, 160 62, 208 62" fill="none" stroke="url(#line)" stroke-width="2"/>
+    <path d="M112 112 C 160 112, 160 106, 208 106" fill="none" stroke="url(#line)" stroke-width="2"/>
+    <path d="M112 112 C 160 112, 160 150, 208 150" fill="none" stroke="url(#line)" stroke-width="2"/>
+
+    <g>
+      <rect x="208" y="38" width="272" height="48" rx="10" fill="#0d1a30" stroke="#22304e"/>
+      <circle cx="230" cy="62" r="7" fill="#4f7dff"/>
+      <text x="246" y="59" class="node">Doubao</text>
+      <text x="246" y="76" class="sub">review · read screenshots</text>
+    </g>
+    <g>
+      <rect x="208" y="86" width="272" height="48" rx="10" fill="#0d1a30" stroke="#22304e"/>
+      <circle cx="230" cy="110" r="7" fill="#37d39b"/>
+      <text x="246" y="107" class="node">WorkBuddy</text>
+      <text x="246" y="124" class="sub">implement · run commands</text>
+    </g>
+    <g>
+      <rect x="208" y="134" width="272" height="48" rx="10" fill="#0d1a30" stroke="#22304e"/>
+      <circle cx="230" cy="158" r="7" fill="#f0b45a"/>
+      <text x="246" y="155" class="node">ZCode / Qoder</text>
+      <text x="246" y="172" class="sub">second opinion · audit</text>
+    </g>
+  </g>
+
+  <g transform="translate(64,330)">
+    <rect x="0" y="0" width="1072" height="100" rx="14" fill="#0a1224" stroke="#1b2740"/>
+    <text x="20" y="30" class="cap">TODAY</text>
+    <text x="20" y="60" class="task">implement hero + meta (WorkBuddy)   →   review (Doubao)   →   fix per review (Qoder)</text>
+    <text x="20" y="84" class="sub">write:landing:hero runs alone; the review reads a snapshot and never blocks the writer</text>
+
+    <circle cx="916" cy="34" r="6" fill="#37d39b"/>
+    <text x="930" y="38" class="sub">2 running · 1 queued</text>
+  </g>
+</svg>

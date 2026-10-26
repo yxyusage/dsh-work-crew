@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Multi-model Team",
+    "description": "DSH leads a team of local AI apps: a task board with ordering and artifact locks dispatches work to Doubao and WorkBuddy, collects results, and keeps progress in .dsh-team/."
+  }
+}
