@@ -124,23 +124,26 @@ export function apply(ctx) {
         const existingRoles = fs.existsSync(rolesFile) ? fs.readFileSync(rolesFile, 'utf8') : '';
         const missingWorker = Object.keys(board.workers).some((id) => !existingRoles.includes(id));
         if (!existingRoles.trim() || missingWorker) {
+          const axis = (w, cap) => (w.caps || []).includes(cap) ? '✓' : '·';
           const table = Object.values(board.workers)
-            .map((w) => `| \`${w.id}\` | ${w.name} | ${w.role} | ${w.port} |`)
+            .map((w) => `| \`${w.id}\` | ${w.name} | ${axis(w, 'implement')} | ${axis(w, 'review')} | ${axis(w, 'screenshot')} | ${axis(w, 'audit')} | ${w.port} |`)
             .join('\n');
           fs.writeFileSync(rolesFile, [
-            '# 团队分工',
+            '# 团队分工与能力矩阵',
             '',
-            '| id | 名字 | 角色 | 端口 |',
-            '|---|---|---|---|',
+            '| id | 名字 | 实现 | 评审 | 截图 | 审计 | 端口 |',
+            '|---|---|---|---|---|---|---|',
             table,
             '',
             '## 规则',
             '- 同一产物的写与读互斥；更细的命名空间（`landing:hero`）可以并行。',
-            '- 同一软件同一时刻只有一个在途任务。',
+            '- 同一软件同一时刻只有一个在途任务（其余进队，自动顶替）。',
+            '- 实现者不验收自己的产物：写任务的人和验收任务的人要分开。',
             '- 产出默认落 `outbox/<id>.md`，聊天只回回执。',
+            '- 额度无法读取：长任务前先 `team_workers ping`，失败就 `team_reassign` 改派。',
             '',
             '## 实测脾气',
-            '- WorkBuddy：能跑命令、改文件，慢（10~20 分钟），适合实现。',
+            '- WorkBuddy：能跑命令、改文件、截图，慢（10~20 分钟），适合实现。',
             '- 豆包：快（1~2 分钟），适合评审/看图，不能改文件（除非开工作模式+本地电脑）。',
             '- ZCode：免费额度会中途断，长任务前先 ping。',
             '- Qoder：VS Code 系，需选工作区 + 自动审批。',
@@ -281,6 +284,19 @@ export function apply(ctx) {
 
         team.assertDispatchable(board, task);
 
+        // Self-acceptance check: a review done by the same worker that wrote the
+        // artifact is the failure mode the crew exists to avoid.
+        const warnings = [];
+        const looksLikeReview = /评审|验收|review|audit/i.test(task.title);
+        if (looksLikeReview && task.read.length) {
+          const sameAuthor = board.tasks.find((item) => item.status === 'done' && item.worker === task.worker
+            && (item.write || []).some((write) => (task.read || []).some((read) => write === read
+              || write.startsWith(`${read}:`) || read.startsWith(`${write}:`))));
+          if (sameAuthor) {
+            warnings.push(`${sameAuthor.id} 就是 ${worker.name} 自己实现的，自证容易走过场——建议 team_reassign 给豆包 / Qoder 再验收。`);
+          }
+        }
+
         // Implementation tasks need a real workspace; a chat-mode app would answer
         // confidently while writing nothing.
         const ready = await checkReady(worker, board.project);
@@ -318,11 +334,12 @@ export function apply(ctx) {
           const warning = ready.ok
             ? ''
             : `\n⚠️ ${worker.name} 当前模式读写不到本地文件：${ready.hint}\n`;
+          const advice = warnings.length ? `\n⚠️ ${warnings.join('\n⚠️ ')}\n` : '';
           return {
             ok: true,
             text: `已派单 ${task.id} → ${worker.name}（发送方式 ${sentVia}，端口 ${worker.port}）。\n`
               + `简报：${briefFile}\n`
-              + `${warning}`
+              + `${warning}${advice}`
               + `下一步：team_collect {"taskId":"${task.id}"} 取回结果（生成通常需要 30 秒~数分钟）。`,
             data: { taskId: task.id, worker: worker.id, ready: ready.ok },
           };
@@ -570,6 +587,36 @@ export function apply(ctx) {
     ),
 
     defineTool(
+      'team_resubmit',
+      '补交：任务因为缺少产物被 blocked 时用。只重新检查 expect（不重新派单），齐了就转 done 并释放锁。',
+      {
+        taskId: { type: 'string', description: '任务 id。' },
+        note: { type: 'string', description: '补交说明（谁补的、补了什么），写进时间线。' },
+      },
+      ['taskId'],
+      async (args, exec) => {
+        const board = await boardFor(exec);
+        const task = team.findTask(board, args.taskId);
+        const missing = (task.expect || []).filter((rel) => !fs.existsSync(path.resolve(board.dir, rel)));
+        if (missing.length) {
+          return {
+            ok: false,
+            text: `${task.id} 还缺：${missing.join('、')}。补齐后可以再调一次 team_resubmit。`,
+            data: { taskId: task.id, missing },
+          };
+        }
+        task.status = 'done';
+        task.error = '';
+        task.finishedAt = new Date().toISOString();
+        team.releaseLocks(board, task);
+        team.releaseChannel(task.worker, task.id);
+        team.event(board, 'task/resubmit', `${task.id} 补交通过${args.note ? `：${args.note}` : ''}`, { taskId: task.id });
+        team.save(board);
+        return { ok: true, text: `${task.id} 的产物齐了，已转 done 并释放锁。`, data: { taskId: task.id } };
+      },
+    ),
+
+    defineTool(
       'team_reopen',
       '把被误判完成的任务打回「进行中」，不重新发送。'
       + '用于软件其实还在干活（例如还在写文件），但 collect 已经提前收单的情况：打回后可以继续 collect。',
@@ -589,17 +636,31 @@ export function apply(ctx) {
 
     defineTool(
       'team_release',
-      '手动结束一个任务（不取结果）：status=done 表示已完成并释放锁，blocked 表示卡住需要人介入。',
+      '手动结束一个任务（不取结果）：status=done 表示已完成并释放锁，blocked 表示卡住需要人介入。'
+      + '标 done 时会先核对 expect；产物不齐会被拒绝，确要认真收尾请传 force:true。',
       {
         taskId: { type: 'string', description: '任务 id。' },
         status: { type: 'string', enum: ['done', 'blocked'], description: '默认 done。' },
         note: { type: 'string', description: '原因/交接说明，写进时间线。' },
+        force: { type: 'boolean', description: '产物不齐也强制标 done（不建议）。' },
       },
       ['taskId'],
       async (args, exec) => {
         const board = await boardFor(exec);
         const task = team.findTask(board, args.taskId);
-        task.status = args.status === 'blocked' ? 'blocked' : 'done';
+        const target = args.status === 'blocked' ? 'blocked' : 'done';
+        if (target === 'done' && !args.force) {
+          const missing = (task.expect || []).filter((rel) => !fs.existsSync(path.resolve(board.dir, rel)));
+          if (missing.length) {
+            return {
+              ok: false,
+              text: `${task.id} 的验收产物还缺：${missing.join('、')}\n`
+                + '补齐后可以 team_resubmit 只做检查；如果就是要收尾，传 force:true。',
+              data: { taskId: task.id, missing },
+            };
+          }
+        }
+        task.status = target;
         task.note = args.note || task.note;
         team.releaseLocks(board, task);
         team.releaseChannel(task.worker, task.id);
@@ -634,10 +695,11 @@ export function apply(ctx) {
               ok: ready.ok,
               hint: ready.hint || '',
               reason: ready.reason || '',
+              caps: worker.caps || [],
             });
           }
           const lines = rows.map((row) => (row.ok
-            ? `- ${row.name}：✅ 可以干活`
+            ? `- ${row.name}：✅ 可以干活（${row.caps.join(' / ') || '未标注能力'}）`
             : `- ${row.name}：❌ ${row.reason || '当前模式不能读写本地文件'}\n    → ${row.hint || '请在该软件里切换模式/工作区'}`));
           team.event(board, 'worker/preflight', rows.map((r) => `${r.worker}:${r.ok ? 'ok' : 'not-ready'}`).join(' '));
           team.save(board);

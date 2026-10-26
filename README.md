@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — one prompt, a working team" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.2.0-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.3.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -61,6 +61,21 @@ T2  review landing      Doubao      read:landing        ← waits for T1 (write�
 T3  product discussion  Doubao      —                   ← runs in parallel with T1
 T4  docs                Qoder       write:docs          dependsOn: [T1, T2]
 ```
+
+## Tools
+
+| Tool | When to use |
+|---|---|
+| `team_init` | first time in a project; records reference dirs and required docs |
+| `team_status` | who runs what, queue depth, last activity, held locks |
+| `team_add_task` | declare worker, dependencies, locks, deadline, expected artifacts |
+| `team_dispatch` | send a brief; queues when the worker is busy (no lock, no timeout yet) |
+| `team_collect` | wait for receipts: `taskIds` returns whoever finishes first |
+| `team_reassign` | move a task to another worker, keeping brief and history |
+| `team_reopen` | a false completion → back to running, without re-sending |
+| `team_resubmit` | artifacts now exist → re-check expect instead of re-dispatching |
+| `team_release` | close a task (refuses `done` while expected artifacts are missing) |
+| `team_workers` | status / preflight / restart / ping |
 
 ## Workers
 

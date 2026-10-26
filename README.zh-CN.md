@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — 一个指令，一支班组" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.2.0-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.3.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -60,6 +60,21 @@ T2  评审落地页     豆包        read:landing         ← 等 T1（写×读
 T3  产品讨论       豆包        —                    ← 与 T1 并行
 T4  写文档         Qoder       write:docs           dependsOn: [T1, T2]
 ```
+
+## 工具
+
+| 工具 | 什么时候用 |
+|---|---|
+| `team_init` | 项目第一次用；顺便记下参考目录和必读文档 |
+| `team_status` | 谁在跑、队列多长、最后活动、锁被谁占 |
+| `team_add_task` | 声明负责人、依赖、锁、超时预算、验收产物 |
+| `team_dispatch` | 派单；worker 忙时自动排队（不占锁、不计超时） |
+| `team_collect` | 收单：传 `taskIds`，谁先完成返回谁 |
+| `team_reassign` | 改派给另一个 worker，保留简报与时间线 |
+| `team_reopen` | 误判完成 → 打回进行中，不重新发送 |
+| `team_resubmit` | 产物补齐了 → 只重查 expect，不用重新派单 |
+| `team_release` | 收尾；产物不齐时拒绝标 done |
+| `team_workers` | status / preflight / restart / ping |
 
 ## 四名成员
 
