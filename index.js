@@ -644,6 +644,37 @@ export function apply(ctx) {
           };
         }
 
+        // Regression gate: any code task that touches a page must leave the page
+        // runnable. Structure checks passed while the UI was broken, so this runs
+        // the page for real: console errors, exceptions, overflow at two widths.
+        const codeNamespaces = task.write.filter((ns) => !/^(discussion|docs?|review|report|notes?|briefs?)(:|$)/i.test(ns));
+        let runtimeNote = '';
+        if (codeNamespaces.length && fs.existsSync(path.join(board.dir, 'index.html'))) {
+          try {
+            const { check } = await import('./lib/runtime.js');
+            const runtime = await check({ target: path.join(board.dir, 'index.html'), widths: [1440, 390] });
+            task.runtimeCheck = { ok: runtime.problems.length === 0, problems: runtime.problems };
+            if (runtime.problems.length) {
+              task.status = 'blocked';
+              task.error = `运行时检查失败：${runtime.problems[0]}`;
+              team.releaseLocks(board, task);
+              team.releaseChannel(task.worker, task.id);
+              team.event(board, 'task/runtime', `${task.id} 运行时检查失败`, { taskId: task.id });
+              team.save(board);
+              return {
+                ok: false,
+                text: `${task.id} 的改动让页面跑不起来了：\n`
+                  + runtime.problems.map((p) => ` - ${p}`).join('\n')
+                  + '\n任务已 blocked、锁已释放。修完再派（同一批改动不需要拆任务，直接 team_reopen + team_dispatch）。',
+                data: { taskId: task.id, runtime: false, problems: runtime.problems },
+              };
+            }
+            runtimeNote = '\n运行时：控制台零报错、1440/390 无横向溢出。';
+          } catch (error) {
+            runtimeNote = `\n（运行时检查跳过：${error.message}）`;
+          }
+        }
+
         // Evidence before verdict: if the task declared an acceptance command,
         // run it. A green chat answer does not outrank a red build.
         if (task.verify) {
@@ -760,7 +791,7 @@ export function apply(ctx) {
             ok: true,
             text: `${task.id} 完成，用时 ${Math.round(elapsedMs / 1000)} 秒。\n`
               + `产出已落盘：${outbox}（${body.length} 字）\n`
-              + `正文没有进上下文——下游任务读这个文件即可。${tail}`,
+              + `正文没有进上下文——下游任务读这个文件即可。${runtimeNote}${tail}`,
             data: { taskId: task.id, outbox, chars: body.length, delivered: 'file', stillRunning },
           };
         }
@@ -1089,6 +1120,77 @@ export function apply(ctx) {
             + `${styleMatch ? ' + styles.css' : ''}${scriptMatches.length ? ' + app.js' : ''}。\n`
             + '接下来可以给不同 worker 分配不同的 write 命名空间（page:html / page:css / page:js）并行改。',
           data: { html: file, css: styleMatch ? cssFile : null, js: scriptMatches.length ? jsFile : null },
+        };
+      },
+    ),
+
+    defineTool(
+      'team_check',
+      '运行时验收：真的打开页面，抓控制台报错、量横向溢出、可跑一段点击冒烟脚本。'
+      + '结构检查（文件存在/无外链）过了不代表页面能跑——这道闸门专治"PASS 但报错/按钮没反应"。',
+      {
+        target: { type: 'string', description: '页面路径或 URL，默认 index.html。' },
+        widths: { type: 'array', items: { type: 'integer' }, description: '要检查的视口宽度，默认 [1440, 390]。' },
+        smoke: { type: 'string', description: '可选：一段在页面里执行的 JS（如点按钮后读结果），返回值会带回来。' },
+      },
+      [],
+      async (args, exec) => {
+        const board = await boardFor(exec);
+        const target = path.isAbsolute(args?.target || 'index.html')
+          ? (args?.target || path.join(board.dir, 'index.html'))
+          : path.join(board.dir, args?.target || 'index.html');
+        const { check } = await import('./lib/runtime.js');
+        const result = await check({
+          target,
+          widths: Array.isArray(args?.widths) && args.widths.length ? args.widths : [1440, 390],
+          smoke: args?.smoke || '',
+        });
+        team.event(board, 'check', `${path.basename(target)} ${result.problems.length ? 'FAIL' : 'PASS'}`);
+        team.save(board);
+        const lines = [
+          result.problems.length ? `FAIL（${result.problems.length} 项）` : 'PASS：控制台零报错、各宽度无横向溢出',
+          ...result.problems.map((item) => ` - ${item}`),
+        ];
+        if (result.errors.length) lines.push(`控制台：${result.errors.slice(0, 3).join(' ｜ ')}`);
+        lines.push(`视口：${result.widths.map((w) => `${w.width}px→scrollWidth ${w.scrollWidth}`).join('，')}`);
+        if (result.smoke !== undefined) lines.push(`冒烟返回：${JSON.stringify(result.smoke).slice(0, 300)}`);
+        return { ok: result.problems.length === 0, text: lines.join('\n'), data: { problems: result.problems } };
+      },
+    ),
+
+    defineTool(
+      'team_bundle',
+      '把 styles.css 和 app.js 内联回 index.html，产出一个可以单独发走的单文件。'
+      + '并行开发时拆开、交付前合并——别让"多文件"成为交付形态。',
+      {
+        out: { type: 'string', description: '输出文件，默认 index.html（会覆盖）。' },
+      },
+      [],
+      async (args, exec) => {
+        const board = await boardFor(exec);
+        const htmlFile = path.join(board.dir, 'index.html');
+        const cssFile = path.join(board.dir, 'styles.css');
+        const jsFile = path.join(board.dir, 'app.js');
+        if (!fs.existsSync(htmlFile)) throw new Error('找不到 index.html');
+        let html = fs.readFileSync(htmlFile, 'utf8');
+        const parts = [];
+        if (fs.existsSync(cssFile) && /<link[^>]+styles\.css/i.test(html)) {
+          html = html.replace(/<link[^>]+styles\.css[^>]*>/i, `<style>\n${fs.readFileSync(cssFile, 'utf8').trim()}\n</style>`);
+          parts.push('styles.css');
+        }
+        if (fs.existsSync(jsFile) && /<script[^>]+app\.js/i.test(html)) {
+          html = html.replace(/<script[^>]+app\.js[^>]*><\/script>/i, `<script>\n${fs.readFileSync(jsFile, 'utf8').trim()}\n</script>`);
+          parts.push('app.js');
+        }
+        if (!parts.length) return { ok: false, text: 'index.html 里没有引用 styles.css / app.js，可能已经是单文件。', data: {} };
+        const out = path.isAbsolute(args?.out || 'index.html') ? (args.out || htmlFile) : path.join(board.dir, args?.out || 'index.html');
+        fs.writeFileSync(out, html, 'utf8');
+        team.event(board, 'bundle', `合并 ${parts.join(' + ')} → ${path.basename(out)}`);
+        team.save(board);
+        return {
+          ok: true,
+          text: `已合并：${path.basename(out)}（${Math.round(Buffer.byteLength(html) / 1024)} KB），可以单独发给别人。源文件保留，改完重新跑一次即可。`,
+          data: { out, parts },
         };
       },
     ),
