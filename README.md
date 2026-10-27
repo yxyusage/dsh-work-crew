@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — one prompt, a working team" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.5.1-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.6.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -69,12 +69,14 @@ T4  docs                Qoder       write:docs          dependsOn: [T1, T2]
 | `team_init` | first time in a project; records reference dirs and required docs |
 | `team_status` | who runs what, queue depth, last activity, held locks |
 | `team_add_task` | declare worker, dependencies, locks, deadline, expected artifacts |
-| `team_dispatch` | send a brief; queues when the worker is busy (no lock, no timeout yet) |
+| `team_dispatch` | send a brief; **takes `taskIds` to dispatch several in one step**; queues when a worker is busy |
 | `team_collect` | wait for receipts: `taskIds` returns whoever finishes first |
 | `team_reassign` | move a task to another worker, keeping brief and history |
 | `team_reopen` | a false completion → back to running, without re-sending |
 | `team_resubmit` | artifacts now exist → re-check expect instead of re-dispatching |
 | `team_release` | close a task (refuses `done` while expected artifacts are missing) |
+| `team_split_html` | split a single-file page into html/css/js so three workers can edit in parallel |
+| `team_shot` | screenshot to a file, path only — device emulation for mobile widths |
 | `team_workers` | status / preflight / restart / ping |
 
 ## Workers
@@ -102,24 +104,19 @@ T4  docs                Qoder       write:docs          dependsOn: [T1, T2]
 
 ## Screenshots: two traps that produce false reviews
 
-**Desktop shots** need a virtual clock, or you capture the page mid-fade:
+Use `team_shot` — it already avoids both traps and returns only a path:
 
-```powershell
-chrome --headless=new --force-prefers-reduced-motion --virtual-time-budget=3000 `
-  --window-size=1440,3000 --screenshot=shots/full.png index.html
+```text
+team_shot { "target": "index.html", "out": "shots/mobile-390.png", "width": 390, "mobile": true }
 ```
 
-**Mobile width must be emulated, not just resized.** `--window-size=390,844` sets the *window*, but the layout still
-uses the desktop viewport (often 980px), so the screenshot shows a cropped desktop page — which reads as "the layout
-overflows" and sends a reviewer chasing a bug that does not exist. Emulate the device over CDP instead:
+**Trap 1 — capturing mid-animation.** A headless shot without a virtual clock lands on the fade-in, so the page looks
+half-transparent. `team_shot` emulates `prefers-reduced-motion: reduce` and waits for the layout to settle.
 
-```js
-await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-const shot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
-```
-
-Verify with `document.documentElement.scrollWidth` before believing an overflow report: if it equals the viewport
-width, the layout is fine and the screenshot is lying.
+**Trap 2 — resizing the window instead of emulating the device.** `--window-size=390,844` sets the *window*, but the
+layout keeps the desktop viewport (~980px), so the shot is a cropped desktop page. That reads as "the layout overflows"
+and sends a reviewer chasing a bug that does not exist. Device emulation is the only honest mobile shot, and
+`team_shot` checks `scrollWidth` for you: if it equals the viewport, the layout is fine.
 
 ## Guardrails
 

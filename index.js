@@ -208,6 +208,92 @@ export function apply(ctx) {
   }
 
 
+  /**
+   * Dispatch one task: queue when busy, prepare review context, gate, send.
+   * A function so `taskIds` can dispatch several tasks in one step — every extra
+   * model step re-sends the whole conversation, which is the real cost.
+   */
+  async function dispatchOne(board, task, options = {}) {
+    const worker = board.workers[task.worker];
+    if (!worker.exe) throw new Error(`找不到 ${worker.name} 的可执行文件，请在 .dsh-team/board.json 的 workers.${task.worker}.exe 里填写路径。`);
+
+    const busy = team.workerBusyTask(board, task.worker);
+    if (busy && options.queue !== false) {
+      task.status = 'queued';
+      task.queuedAt = new Date().toISOString();
+      const ahead = board.tasks
+        .filter((item) => item.worker === task.worker && item.id !== task.id && (item.status === 'running' || item.status === 'queued'))
+        .map((item) => item.id);
+      team.event(board, 'task/queue', `${task.id} 排队在 ${worker.name} 后面（${ahead.join(',')}）`, { taskId: task.id });
+      team.save(board);
+      return `${task.id} 已排队：${worker.name} 正在跑 ${busy.id}（前面 ${ahead.length} 个）。`;
+    }
+
+    let diff = '';
+    let snapshotDir = '';
+    let reviewRound = 0;
+    if (task.review) {
+      const overlaps = (a, b) => a === b || a.startsWith(`${b}:`) || b.startsWith(`${a}:`);
+      reviewRound = board.tasks.filter((item) => item.review && item.status === 'done'
+        && (item.read || []).some((r) => (task.read || []).some((tr) => overlaps(r, tr)))).length + 1;
+      task.reviewRound = reviewRound;
+      const base = reviewBase(board, task);
+      diff = reviewDiff(board, base);
+      if (task.snapshot) {
+        snapshotDir = copySnapshot(board, task, base);
+        if (snapshotDir) {
+          task.snapshotDir = snapshotDir;
+          task.readAdvisory = true;
+        }
+      }
+    } else if (task.write.length) {
+      const head = gitOut(board, 'rev-parse HEAD', 10000).trim();
+      if (head) task.baseCommit = head;
+    }
+
+    team.assertDispatchable(board, task);
+
+    const warnings = [];
+    const looksLikeReview = /评审|验收|review|audit/i.test(task.title);
+    if (looksLikeReview && task.read.length) {
+      const sameAuthor = board.tasks.find((item) => item.status === 'done' && item.worker === task.worker
+        && (item.write || []).some((write) => (task.read || []).some((read) => write === read
+          || write.startsWith(`${read}:`) || read.startsWith(`${write}:`))));
+      if (sameAuthor) warnings.push(`${sameAuthor.id} 就是 ${worker.name} 自己实现的，自证容易走过场。`);
+    }
+
+    const ready = await checkReady(worker, board.project);
+    const codeWrite = task.write.filter((ns) => !/^(discussion|docs?|review|report|notes?|briefs?)(:|$)/i.test(ns));
+    if (!ready.ok && codeWrite.length) {
+      throw new Error(`${worker.name} 没就绪：${ready.reason || '当前模式不能读写本地文件'}\n→ ${ready.hint || '先切工作区/权限'}`);
+    }
+
+    const holder = team.acquireChannel(task.worker, board.dir, task.id);
+    if (holder) {
+      throw new Error(`${worker.name} 正被另一个项目占用：${holder.project} / ${holder.taskId}。等它收单，或先对那个项目 team_release。`);
+    }
+
+    try {
+      task.pendingDiff = diff;
+      task.pendingSnapshot = snapshotDir;
+      const sent = await sendNow(board, task);
+      team.save(board);
+      const notes = [];
+      if (!ready.ok) notes.push(`${worker.name} 当前模式读写不到本地文件：${ready.hint}`);
+      notes.push(...warnings);
+      return `已派单 ${task.id} → ${worker.name}（${sent.sentVia}${snapshotDir ? '，评审读快照' : ''}）。`
+        + (notes.length ? `\n⚠️ ${notes.join('\n⚠️ ')}` : '');
+    } catch (error) {
+      task.status = 'ready';
+      task.error = error.message;
+      team.releaseLocks(board, task);
+      team.releaseChannel(task.worker, task.id);
+      team.event(board, 'task/error', `${task.id} 派单失败：${error.message}`, { taskId: task.id });
+      team.save(board);
+      throw new Error(`派单失败：${error.message}`);
+    }
+  }
+
   const tools = [
     defineTool(
       'team_init',
@@ -395,126 +481,31 @@ export function apply(ctx) {
     defineTool(
       'team_dispatch',
       '把任务派给对应软件：生成简报、检查依赖与锁、投喂并发送。'
-      + 'worker 正忙时自动排队（status=queued，不占锁、不开始计时），当前任务收单后自动顶上。'
-      + '实现类任务（有 write）在软件工作区未就绪时直接拒绝，不会派出去才发现白跑。',
+      + '支持一次传 taskIds 派多个（并行时省一整个来回）。worker 忙时自动排队，当前任务收单后顶上。',
       {
-        taskId: { type: 'string', description: '任务 id，例如 T1。' },
+        taskId: { type: 'string', description: '单个任务 id（与 taskIds 二选一）。' },
+        taskIds: { type: 'array', items: { type: 'string' }, description: '一组任务 id：一次派多个，各走各的锁与队列。' },
         queue: { type: 'boolean', description: 'worker 忙时是否排队，默认 true；传 false 则直接报错。' },
       },
-      ['taskId'],
+      [],
       async (args, exec) => {
         const board = await boardFor(exec);
-        const task = team.findTask(board, args.taskId);
-        const worker = board.workers[task.worker];
-        if (!worker.exe) throw new Error(`找不到 ${worker.name} 的可执行文件，请在 .dsh-team/board.json 的 workers.${task.worker}.exe 里填写路径。`);
-
-        // A busy worker means "queued", not "stuck". Hiding this cost a real run
-        // ten minutes of confusion.
-        const busy = team.workerBusyTask(board, task.worker);
-        if (busy && args?.queue !== false) {
-          task.status = 'queued';
-          task.queuedAt = new Date().toISOString();
-          const ahead = board.tasks
-            .filter((item) => item.worker === task.worker && item.id !== task.id && (item.status === 'running' || item.status === 'queued'))
-            .map((item) => item.id);
-          team.event(board, 'task/queue', `${task.id} 排队在 ${worker.name} 后面（${ahead.join(',')}）`, { taskId: task.id });
-          team.save(board);
-          return {
-            ok: true,
-            text: `${task.id} 已排队：${worker.name} 正在跑 ${busy.id}。\n`
-              + `前面还有 ${ahead.length} 个（${ahead.join('、')}）。排队不占锁、不计超时，当前任务收单后自动开始。`,
-            data: { taskId: task.id, queued: true, ahead },
-          };
-        }
-        // Review tasks get a clean room: requirement + diff + rubric, nothing else.
-        // Prepared before lock checks because a snapshot review takes no read lock.
-        let diff = '';
-        let snapshotDir = '';
-        let reviewRound = 0;
-        if (task.review) {
-          const overlaps = (a, b) => a === b || a.startsWith(`${b}:`) || b.startsWith(`${a}:`);
-          reviewRound = board.tasks.filter((item) => item.review && item.status === 'done'
-            && (item.read || []).some((r) => (task.read || []).some((tr) => overlaps(r, tr)))).length + 1;
-          task.reviewRound = reviewRound;
-          const base = reviewBase(board, task);
-          diff = reviewDiff(board, base);
-          if (task.snapshot) {
-            snapshotDir = copySnapshot(board, task, base);
-            if (snapshotDir) {
-              task.snapshotDir = snapshotDir;
-              task.readAdvisory = true;
-            }
-          }
-        } else if (task.write.length) {
-          // Remember the starting point: a review after this task diffs from here,
-          // so committed work still shows up.
-          const head = gitOut(board, 'rev-parse HEAD', 10000).trim();
-          if (head) task.baseCommit = head;
-        }
-
-        team.assertDispatchable(board, task);
-
-        // Self-acceptance check: a review done by the same worker that wrote the
-        // artifact is the failure mode the crew exists to avoid.
-        const warnings = [];
-        const looksLikeReview = /评审|验收|review|audit/i.test(task.title);
-        if (looksLikeReview && task.read.length) {
-          const sameAuthor = board.tasks.find((item) => item.status === 'done' && item.worker === task.worker
-            && (item.write || []).some((write) => (task.read || []).some((read) => write === read
-              || write.startsWith(`${read}:`) || read.startsWith(`${write}:`))));
-          if (sameAuthor) {
-            warnings.push(`${sameAuthor.id} 就是 ${worker.name} 自己实现的，自证容易走过场——建议 team_reassign 给豆包 / Qoder 再验收。`);
+        const ids = Array.isArray(args?.taskIds) && args.taskIds.length
+          ? args.taskIds
+          : [args?.taskId].filter(Boolean);
+        if (!ids.length) throw new Error('需要 taskId 或 taskIds');
+        const lines = [];
+        for (const id of ids) {
+          const task = team.findTask(board, id);
+          try {
+            lines.push(await dispatchOne(board, task, args));
+          } catch (error) {
+            lines.push(`❌ ${id}：${error.message}`);
           }
         }
-
-        // Only code-writing tasks need a real workspace. A discussion or report task
-        // writes prose into outbox and must not be blocked by an approval-mode hint.
-        const ready = await checkReady(worker, board.project);
-        const codeWrite = task.write.filter((ns) => !/^(discussion|docs?|review|report|notes?|briefs?)(:|$)/i.test(ns));
-        if (!ready.ok && codeWrite.length) {
-          throw new Error(`${worker.name} 没就绪，拒绝派实现任务：${ready.reason || '当前模式不能读写本地文件'}\n→ ${ready.hint || '先切工作区/权限'}`);
-        }
-
-        // Machine-wide channel lock: one app, one typist — across projects too.
-        const holder = team.acquireChannel(task.worker, board.dir, task.id);
-        if (holder) {
-          throw new Error(
-            `${worker.name} 正被另一个项目占用：${holder.project} / ${holder.taskId}（自 ${holder.since}）。\n`
-            + '同一个软件同一时刻只能被一个任务投喂，否则两边输入会串。等它收单，或先对那个项目 team_release。',
-          );
-        }
-
-        try {
-          // sendNow rebuilds the review context itself; passing it avoids doing the
-          // git diff twice for a plain implementation task.
-          task.pendingDiff = diff;
-          task.pendingSnapshot = snapshotDir;
-          const { sentVia } = await sendNow(board, task);
-          team.save(board);
-          const warning = ready.ok
-            ? ''
-            : `\n⚠️ ${worker.name} 当前模式读写不到本地文件：${ready.hint}\n`;
-          const advice = warnings.length ? `\n⚠️ ${warnings.join('\n⚠️ ')}\n` : '';
-          return {
-            ok: true,
-            text: `已派单 ${task.id} → ${worker.name}（发送方式 ${sentVia}，端口 ${worker.port}）${snapshotDir ? '，评审读快照、不占读锁' : ''}。\n`
-              + `简报：${task.brief}\n`
-              + `${warning}${advice}`
-              + `下一步：team_collect {"taskId":"${task.id}"} 取回结果（生成通常需要 30 秒~数分钟）。`,
-            data: { taskId: task.id, worker: worker.id, ready: ready.ok, snapshot: !!snapshotDir, reviewRound },
-          };
-        } catch (error) {
-          task.status = 'ready';
-          task.error = error.message;
-          team.releaseLocks(board, task);
-          team.releaseChannel(task.worker, task.id);
-          team.event(board, 'task/error', `${task.id} 派单失败：${error.message}`, { taskId: task.id });
-          team.save(board);
-          throw new Error(`派单失败：${error.message}`);
-        }
+        return { ok: true, text: lines.join('\n'), data: { dispatched: ids } };
       },
     ),
-
     defineTool(
       'team_collect',
       '等任务收单：可以一次传多个 taskId，**谁先完成就返回谁**，不用一个个轮询。'
@@ -989,6 +980,92 @@ export function apply(ctx) {
           return `- ${worker.name}：${h.online ? '在线' : '离线'}${note}，端口 ${worker.port}`;
         });
         return { ok: true, text: lines.join('\n'), data: health };
+      },
+    ),
+
+    defineTool(
+      'team_shot',
+      '用无头浏览器截一张图，只返回文件路径（图片本身不进上下文）。'
+      + '手机宽度必须用它：直接 resize 窗口会得到"被裁切的桌面版"，会误导评审。',
+      {
+        target: { type: 'string', description: '页面路径（相对项目目录或绝对路径）或 URL。' },
+        out: { type: 'string', description: '输出 PNG 路径，相对项目目录，例如 shots/mobile-390.png。' },
+        width: { type: 'integer', description: '视口宽度，默认 1440；手机用 390。' },
+        height: { type: 'integer', description: '视口高度，默认 900。' },
+        mobile: { type: 'boolean', description: 'true 时按移动设备模拟（DPR 2 + mobile 视口），手机宽度必须传 true。' },
+        fullPage: { type: 'boolean', description: '是否截整页，默认 true。' },
+      },
+      ['target', 'out'],
+      async (args, exec) => {
+        const board = await boardFor(exec);
+        const out = path.isAbsolute(args.out) ? args.out : path.join(board.dir, args.out);
+        const target = path.isAbsolute(args.target) ? args.target : path.join(board.dir, args.target);
+        const { capture } = await import('./lib/shot.js');
+        const result = await capture({
+          target,
+          out,
+          width: args.width ?? 1440,
+          height: args.height ?? 900,
+          mobile: args.mobile === true,
+          fullPage: args.fullPage !== false,
+        });
+        team.event(board, 'shot', `${path.basename(out)} ${result.cssWidth}px${result.overflow ? ' 溢出!' : ''}`);
+        team.save(board);
+        return {
+          ok: true,
+          text: `已截图：${result.path}（${Math.round(result.bytes / 1024)} KB，视口 ${result.cssWidth}px）`
+            + (result.overflow ? `\n⚠️ 检测到横向溢出：scrollWidth=${result.scrollWidth} > ${result.cssWidth}` : '')
+            + '\n把路径交给评审者即可，不要让主会话去看图。',
+          data: { path: result.path, bytes: result.bytes, overflow: result.overflow },
+        };
+      },
+    ),
+
+    defineTool(
+      'team_split_html',
+      '把单文件 HTML 拆成 index.html + styles.css + app.js（机械拆分，保留原内容）。'
+      + '拆完才能让几个 worker 各改一个文件、真正并行；不拆就只能串行改同一个文件。',
+      {
+        file: { type: 'string', description: '要拆的 HTML 文件，默认 index.html。' },
+        force: { type: 'boolean', description: '目标文件已存在时是否覆盖，默认 false。' },
+      },
+      [],
+      async (args, exec) => {
+        const board = await boardFor(exec);
+        const file = path.join(board.dir, args?.file || 'index.html');
+        if (!fs.existsSync(file)) throw new Error(`找不到 ${args?.file || 'index.html'}`);
+        const cssFile = path.join(board.dir, 'styles.css');
+        const jsFile = path.join(board.dir, 'app.js');
+        if (!args?.force && (fs.existsSync(cssFile) || fs.existsSync(jsFile))) {
+          return { ok: false, text: 'styles.css / app.js 已存在，确认要重拆请传 force:true。', data: {} };
+        }
+        const html = fs.readFileSync(file, 'utf8');
+        const styleMatch = html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+        const scriptMatches = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)];
+        if (!styleMatch && !scriptMatches.length) {
+          return { ok: false, text: '这个 HTML 里没有内联 <style> 或 <script>，不需要拆。', data: {} };
+        }
+        let next = html;
+        if (styleMatch) {
+          fs.writeFileSync(cssFile, styleMatch[1].trim() + '\n', 'utf8');
+          next = next.replace(styleMatch[0], '<link rel="stylesheet" href="styles.css">');
+        }
+        if (scriptMatches.length) {
+          const js = scriptMatches.map((m) => m[1]).join('\n\n');
+          fs.writeFileSync(jsFile, js.trim() + '\n', 'utf8');
+          for (const m of scriptMatches) next = next.replace(m[0], '');
+          next = next.replace('</body>', '  <script src="app.js" defer></script>\n</body>');
+        }
+        fs.writeFileSync(file, next, 'utf8');
+        team.event(board, 'split', `${path.basename(file)} → styles.css ${fs.statSync(cssFile).size}B / app.js ${fs.existsSync(jsFile) ? fs.statSync(jsFile).size : 0}B`);
+        team.save(board);
+        return {
+          ok: true,
+          text: `已拆分：${path.basename(file)}（${Buffer.byteLength(next)} 字节）`
+            + `${styleMatch ? ' + styles.css' : ''}${scriptMatches.length ? ' + app.js' : ''}。\n`
+            + '接下来可以给不同 worker 分配不同的 write 命名空间（page:html / page:css / page:js）并行改。',
+          data: { html: file, css: styleMatch ? cssFile : null, js: scriptMatches.length ? jsFile : null },
+        };
       },
     ),
   ];
