@@ -1174,23 +1174,43 @@ export function apply(ctx) {
         if (!fs.existsSync(htmlFile)) throw new Error('找不到 index.html');
         let html = fs.readFileSync(htmlFile, 'utf8');
         const parts = [];
+        // Replacement functions, not strings: a `$` in the inlined source is
+        // interpreted by String.replace ("$$" → "$"), which silently corrupts code.
         if (fs.existsSync(cssFile) && /<link[^>]+styles\.css/i.test(html)) {
-          html = html.replace(/<link[^>]+styles\.css[^>]*>/i, `<style>\n${fs.readFileSync(cssFile, 'utf8').trim()}\n</style>`);
+          const css = fs.readFileSync(cssFile, 'utf8').trim();
+          html = html.replace(/<link[^>]+styles\.css[^>]*>/i, () => `<style>\n${css}\n</style>`);
           parts.push('styles.css');
         }
         if (fs.existsSync(jsFile) && /<script[^>]+app\.js/i.test(html)) {
-          html = html.replace(/<script[^>]+app\.js[^>]*><\/script>/i, `<script>\n${fs.readFileSync(jsFile, 'utf8').trim()}\n</script>`);
+          const js = fs.readFileSync(jsFile, 'utf8').trim();
+          html = html.replace(/<script[^>]+app\.js[^>]*><\/script>/i, () => `<script>\n${js}\n</script>`);
           parts.push('app.js');
         }
         if (!parts.length) return { ok: false, text: 'index.html 里没有引用 styles.css / app.js，可能已经是单文件。', data: {} };
         const out = path.isAbsolute(args?.out || 'index.html') ? (args.out || htmlFile) : path.join(board.dir, args?.out || 'index.html');
         fs.writeFileSync(out, html, 'utf8');
-        team.event(board, 'bundle', `合并 ${parts.join(' + ')} → ${path.basename(out)}`);
+
+        // Never trust a build you did not run: check the bundled file immediately.
+        let verdict = '';
+        let ok = true;
+        try {
+          const { check } = await import('./lib/runtime.js');
+          const runtime = await check({ target: out, widths: [1440, 390] });
+          if (runtime.problems.length) {
+            ok = false;
+            verdict = `\n⚠️ 合并后页面有问题：\n${runtime.problems.map((p) => ` - ${p}`).join('\n')}\n源文件没动，修好后重新合并。`;
+          } else {
+            verdict = '\n运行时：控制台零报错、1440/390 无溢出。';
+          }
+        } catch (error) {
+          verdict = `\n（合并后检查跳过：${error.message}）`;
+        }
+        team.event(board, 'bundle', `合并 ${parts.join(' + ')} → ${path.basename(out)}${ok ? '' : '（失败）'}`);
         team.save(board);
         return {
-          ok: true,
-          text: `已合并：${path.basename(out)}（${Math.round(Buffer.byteLength(html) / 1024)} KB），可以单独发给别人。源文件保留，改完重新跑一次即可。`,
-          data: { out, parts },
+          ok,
+          text: `已合并：${path.basename(out)}（${Math.round(Buffer.byteLength(html) / 1024)} KB）${verdict}`,
+          data: { out, parts, ok },
         };
       },
     ),
