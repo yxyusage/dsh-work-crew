@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — one prompt, a working team" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.4.0-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.5.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -102,14 +102,16 @@ T4  docs                Qoder       write:docs          dependsOn: [T1, T2]
 
 ## Guardrails
 
-Four checks stand between "the model says it is done" and "the task is done":
+Six checks stand between "the model says it is done" and "the task is done":
 
 | Guard | What it does |
 |---|---|
 | `review: true` | The reviewer gets **requirement + `git diff` + rubric only**. It is told not to read the implementer's report — a reviewer that inherits the author's narrative inherits the author's blind spots. |
+| Snapshot review | The changed files are copied to `.dsh-team/snapshots/<id>/` and the reviewer reads **the copy**, so the review takes no read lock and the next implementation starts immediately. Diffing starts from the implementer's recorded `baseCommit`, so committed work still shows up. |
 | `verify: "pnpm build"` | The acceptance command runs in the project before the task may close. A red build blocks the task; no green build, no done. |
 | `risk: "high"` | High-risk work (auth, payments, CI, secrets, installers) **never self-approves**: collecting it only reports "awaiting approval" until a human re-collects with `confirm: true`. |
 | `rubric.md` + review round counter | `team_init` writes the project's acceptance rubric; every review carries it. From the 4th review of the same artifact, the brief asks whether the *plan* is wrong instead of requesting another patch list. |
+| `crossCheck: true` | After a review, a **second reviewer** gets the findings and votes on each one: holds / false positive / not enough evidence. Only confirmed issues survive. |
 
 ## Requirements
 

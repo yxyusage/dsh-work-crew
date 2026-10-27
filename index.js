@@ -110,6 +110,104 @@ export function apply(ctx) {
 
   const boardFor = async (exec) => team.board(await team.resolveDir(exec?.agent));
 
+  /** Run a git command in the project, or return '' when this is not a repo. */
+  function gitOut(board, args, timeout = 60000) {
+    try {
+      return execSync(`git ${args}`, { cwd: board.dir, encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'ignore'] }) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Which commit a review should diff from.
+   *
+   * Implementers usually commit. Diffing only the working tree would then show an
+   * empty review, so each implementation records HEAD before it starts and the
+   * review diffs from there — committed and uncommitted work both show up.
+   */
+  function reviewBase(board, task) {
+    const overlaps = (a, b) => a === b || a.startsWith(`${b}:`) || b.startsWith(`${a}:`);
+    for (let i = board.tasks.length - 1; i >= 0; i -= 1) {
+      const item = board.tasks[i];
+      if (item.status !== 'done' || !item.baseCommit) continue;
+      if ((item.write || []).some((w) => (task.read || []).some((r) => overlaps(w, r)))) return item.baseCommit;
+    }
+    return '';
+  }
+
+  /** Unified diff of the change under review, capped so it fits a brief. */
+  function reviewDiff(board, base) {
+    const stat = base ? gitOut(board, `diff --stat ${base}`, 20000) : gitOut(board, 'diff --stat', 20000);
+    const full = base ? gitOut(board, `diff ${base}`) : gitOut(board, 'diff');
+    if (!full.trim()) return '';
+    return `${stat.trim()}\n\n${full}`.trim().slice(0, 8000);
+  }
+
+  /**
+   * Copy the changed files aside for a review.
+   *
+   * The review then reads an immutable snapshot instead of the live tree, so it no
+   * longer needs a read lock — the next implementation can start while it reads.
+   */
+  function copySnapshot(board, task, base) {
+    try {
+      const raw = base ? gitOut(board, `diff --name-only ${base}`, 20000) : gitOut(board, 'diff --name-only', 20000);
+      const names = raw.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 200);
+      if (!names.length) return '';
+      const dir = path.join(board.dir, '.dsh-team', 'snapshots', task.id);
+      fs.rmSync(dir, { recursive: true, force: true });
+      let bytes = 0;
+      for (const rel of names) {
+        const src = path.join(board.dir, rel);
+        if (!fs.existsSync(src) || !fs.statSync(src).isFile()) continue;
+        const size = fs.statSync(src).size;
+        if (bytes + size > 12 * 1024 * 1024) break;
+        bytes += size;
+        const dest = path.join(dir, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(src, dest);
+      }
+      return fs.existsSync(dir) ? dir : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /** Send one task's brief right now (used by queue promotion and cross-check). */
+  async function sendNow(board, task) {
+    const worker = board.workers[task.worker];
+    const base = task.review ? reviewBase(board, task) : '';
+    const diff = task.review ? (task.pendingDiff ?? reviewDiff(board, base)) : '';
+    const snapshotDir = task.review && task.snapshot
+      ? (task.pendingSnapshot ?? copySnapshot(board, task, base))
+      : '';
+    delete task.pendingDiff;
+    delete task.pendingSnapshot;
+    if (snapshotDir) {
+      task.snapshotDir = snapshotDir;
+      task.readAdvisory = true;
+    }
+    const brief = team.brief(board, task, { diff, snapshotDir, reviewRound: task.reviewRound || 1 });
+    const briefFile = path.join(board.dir, '.dsh-team', 'briefs', `${task.id}.md`);
+    fs.writeFileSync(briefFile, brief, 'utf8');
+    team.acquireLocks(board, task);
+    task.status = 'running';
+    task.startedAt = new Date().toISOString();
+    task.queuedAt = '';
+    task.stalled = false;
+    task.stalledNotified = false;
+    task.brief = briefFile;
+    task.error = '';
+    team.event(board, 'task/dispatch', `${task.id} → ${worker.name}${snapshotDir ? '（评审快照）' : ''}`, { taskId: task.id });
+    team.save(board);
+    const sent = await ask(worker, brief);
+    task.baseline = sent.baseline;
+    team.save(board);
+    return { sentVia: sent.sentVia, snapshot: !!snapshotDir };
+  }
+
+
   const tools = [
     defineTool(
       'team_init',
@@ -221,6 +319,14 @@ export function apply(ctx) {
           type: 'boolean',
           description: '评审任务：简报只给需求 + git diff + 验收标准（rubric），并禁止读实现者的 outbox，避免自证与先入为主。',
         },
+        snapshot: {
+          type: 'boolean',
+          description: '评审时把改动文件复制成快照，评审读快照、不占读锁（默认 true）。没有 git 或没有改动时自动退回读工作区。',
+        },
+        crossCheck: {
+          type: 'boolean',
+          description: '评审收单后自动建一个「交叉核验」任务，交给另一个评审者逐条判真/误报，只保留成立的。',
+        },
         verify: {
           type: 'string',
           description: '验收命令（在项目目录执行，例如 "pnpm build"）。收单时先跑它，失败就 blocked、不允许 done。留空表示不跑。',
@@ -320,6 +426,31 @@ export function apply(ctx) {
             data: { taskId: task.id, queued: true, ahead },
           };
         }
+        // Review tasks get a clean room: requirement + diff + rubric, nothing else.
+        // Prepared before lock checks because a snapshot review takes no read lock.
+        let diff = '';
+        let snapshotDir = '';
+        let reviewRound = 0;
+        if (task.review) {
+          const overlaps = (a, b) => a === b || a.startsWith(`${b}:`) || b.startsWith(`${a}:`);
+          reviewRound = board.tasks.filter((item) => item.review && item.status === 'done'
+            && (item.read || []).some((r) => (task.read || []).some((tr) => overlaps(r, tr)))).length + 1;
+          task.reviewRound = reviewRound;
+          const base = reviewBase(board, task);
+          diff = reviewDiff(board, base);
+          if (task.snapshot) {
+            snapshotDir = copySnapshot(board, task, base);
+            if (snapshotDir) {
+              task.snapshotDir = snapshotDir;
+              task.readAdvisory = true;
+            }
+          }
+        } else if (task.write.length) {
+          // Remember the starting point: a review after this task diffs from here,
+          // so committed work still shows up.
+          const head = gitOut(board, 'rev-parse HEAD', 10000).trim();
+          if (head) task.baseCommit = head;
+        }
 
         team.assertDispatchable(board, task);
 
@@ -352,40 +483,12 @@ export function apply(ctx) {
           );
         }
 
-        // Review tasks get a clean room: requirement + diff + rubric, nothing else.
-        let diff = '';
-        let reviewRound = 0;
-        if (task.review) {
-          const overlaps = (a, b) => a === b || a.startsWith(`${b}:`) || b.startsWith(`${a}:`);
-          reviewRound = board.tasks.filter((item) => item.review && item.status === 'done'
-            && (item.read || []).some((r) => (task.read || []).some((tr) => overlaps(r, tr)))).length + 1;
-          task.reviewRound = reviewRound;
-          try {
-            const stat = execSync('git diff --stat', { cwd: board.dir, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'ignore'] });
-            const full = execSync('git diff', { cwd: board.dir, encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'ignore'] });
-            diff = `${(stat || '').trim()}\n\n${full}`.trim().slice(0, 8000);
-          } catch {
-            // Not a git repo, or the working tree is clean: the reviewer still reads files.
-          }
-        }
-
-        const brief = team.brief(board, task, { diff, reviewRound });
-        const briefFile = path.join(board.dir, '.dsh-team', 'briefs', `${task.id}.md`);
-        fs.writeFileSync(briefFile, brief, 'utf8');
-
-        team.acquireLocks(board, task);
-        task.status = 'running';
-        task.startedAt = new Date().toISOString();
-        task.stalled = false;
-        task.stalledNotified = false;
-        task.brief = briefFile;
-        team.event(board, 'task/dispatch', `${task.id} → ${worker.name}`, { taskId: task.id });
-        team.save(board);
-
         try {
-          const { baseline, sentVia } = await ask(worker, brief);
-          task.baseline = baseline;
-          task.error = '';
+          // sendNow rebuilds the review context itself; passing it avoids doing the
+          // git diff twice for a plain implementation task.
+          task.pendingDiff = diff;
+          task.pendingSnapshot = snapshotDir;
+          const { sentVia } = await sendNow(board, task);
           team.save(board);
           const warning = ready.ok
             ? ''
@@ -393,11 +496,11 @@ export function apply(ctx) {
           const advice = warnings.length ? `\n⚠️ ${warnings.join('\n⚠️ ')}\n` : '';
           return {
             ok: true,
-            text: `已派单 ${task.id} → ${worker.name}（发送方式 ${sentVia}，端口 ${worker.port}）。\n`
-              + `简报：${briefFile}\n`
+            text: `已派单 ${task.id} → ${worker.name}（发送方式 ${sentVia}，端口 ${worker.port}）${snapshotDir ? '，评审读快照、不占读锁' : ''}。\n`
+              + `简报：${task.brief}\n`
               + `${warning}${advice}`
               + `下一步：team_collect {"taskId":"${task.id}"} 取回结果（生成通常需要 30 秒~数分钟）。`,
-            data: { taskId: task.id, worker: worker.id, ready: ready.ok },
+            data: { taskId: task.id, worker: worker.id, ready: ready.ok, snapshot: !!snapshotDir, reviewRound },
           };
         } catch (error) {
           task.status = 'ready';
@@ -610,20 +713,7 @@ export function apply(ctx) {
         const next = team.nextQueued(board, task.worker);
         if (next) {
           try {
-            const nextBrief = team.brief(board, next);
-            const nextBriefFile = path.join(board.dir, '.dsh-team', 'briefs', `${next.id}.md`);
-            fs.writeFileSync(nextBriefFile, nextBrief, 'utf8');
-            team.acquireLocks(board, next);
-            next.status = 'running';
-            next.startedAt = new Date().toISOString();
-            next.queuedAt = '';
-            next.brief = nextBriefFile;
-            next.error = '';
-            team.event(board, 'task/promote', `${next.id} 从队列开始`, { taskId: next.id });
-            team.save(board);
-            const sent = await ask(board.workers[next.worker], nextBrief);
-            next.baseline = sent.baseline;
-            team.save(board);
+            await sendNow(board, next);
             promoted = next.id;
           } catch (error) {
             next.status = 'queued';
@@ -632,9 +722,46 @@ export function apply(ctx) {
           }
         }
 
+        // Cross-check: hand the review's findings to a second reviewer to confirm
+        // or dismiss each one. Off by default; enabled per task with crossCheck.
+        let crossTask = '';
+        if (task.review && task.crossCheck && !task.crossChecked) {
+          const verifier = Object.values(board.workers)
+            .find((item) => item.id !== task.worker && (item.caps || []).includes('review'));
+          if (verifier) {
+            const created = team.addTask(board, {
+              title: `核验：${task.title} 的问题清单`,
+              worker: verifier.id,
+              dependsOn: [task.id],
+              review: true,
+              crossCheckOf: task.id,
+              note: [
+                '这是一次**交叉核验**，不是重新评审。',
+                `读 ${outbox}（${task.id} 的评审清单），逐条判断每个问题：`,
+                '- 成立：给出证据（文件:行号 / 复现步骤）；',
+                '- 误报：说明为什么；',
+                '- 证据不足：说明还缺什么。',
+                '最后只保留「成立」的问题，按 P0/P1/P2 重排。宁少勿滥。',
+              ].join('\n'),
+            });
+            task.crossChecked = created.id;
+            team.save(board);
+            try {
+              await sendNow(board, created);
+              crossTask = created.id;
+            } catch (error) {
+              created.status = 'ready';
+              created.error = `核验任务未自动派出：${error.message}`;
+              team.save(board);
+              crossTask = `${created.id}（已建但未派出：${error.message}）`;
+            }
+          }
+        }
+
         const tail = [
           stillRunning.length ? `\n还在跑：${stillRunning.join('、')}（继续用 team_collect 收）。` : '',
           promoted ? `\n队列里的 ${promoted} 已自动开始。` : '',
+          crossTask ? `\n交叉核验任务 ${crossTask} 已建${String(crossTask).includes('未派出') ? '' : '并已派出'}（另一个评审者逐条判真/假）。` : '',
         ].join('');
         if (task.deliver === 'file' && !fellBack) {
           return {
