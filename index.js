@@ -900,7 +900,8 @@ export function apply(ctx) {
       + 'ping：发一条无害的测试消息，验证「投喂→生成→完成判定→读回」整条链路是否正常，返回往返耗时。',
       {
         action: { type: 'string', enum: ['status', 'preflight', 'restart', 'ping'], description: '默认 status。' },
-        worker: { type: 'string', description: 'restart / ping 时指定：workbuddy / doubao / zcode。' },
+        worker: { type: 'string', description: 'restart / ping 时指定：workbuddy / doubao / zcode / qoder；restart 传 all 可一次重启四家。' },
+        workers: { type: 'array', items: { type: 'string' }, description: 'restart 时批量指定几家，例如 ["doubao","qoder"]。' },
       },
       [],
       async (args, exec) => {
@@ -933,26 +934,49 @@ export function apply(ctx) {
           };
         }
         if (action === 'restart' || action === 'ping') {
-          const worker = board.workers[args?.worker];
-          if (!worker) throw new Error(`未知 worker：${args?.worker}；可用：${Object.keys(board.workers).join(', ')}`);
+          // restart accepts "all": four cold starts in one step instead of four.
+          const restartAll = action === 'restart' && (args?.worker === 'all' || Array.isArray(args?.workers));
+          const workerList = restartAll
+            ? (Array.isArray(args?.workers) ? args.workers.map((id) => board.workers[id]).filter(Boolean) : Object.values(board.workers))
+            : [board.workers[args?.worker]].filter(Boolean);
+          const worker = workerList[0];
+          if (!worker) throw new Error(`未知 worker：${args?.worker}；可用：${Object.keys(board.workers).join(', ')} 或 all`);
           if (action === 'restart') {
-            if (!worker.exe) throw new Error(`找不到 ${worker.name} 的可执行文件。`);
-            killApp(worker.exe);
-            await new Promise((r) => setTimeout(r, 2500));
-            await ensureWorker(worker);
-            // The port may answer before any page target exists; never assume a list.
-            const list = (await targets(worker.port)) || [];
-            const pages = list.filter((t) => t.type === 'page').length;
-            team.event(board, 'worker/restart', `${worker.name} 已重启（端口 ${worker.port}，页面 ${pages}）`);
-            team.save(board);
-            if (pages === 0) {
-              return {
-                ok: false,
-                text: `${worker.name} 端口已开，但还没有可用的页面（可能还在加载）。等 10 秒再 ping ${worker.id}，或手动看一眼它是否卡在登录页。`,
-                data: { pages },
-              };
+            const lines = [];
+            let allOk = true;
+            for (const item of workerList) {
+              if (!item.exe) {
+                lines.push(`- ${item.name}：找不到可执行文件`);
+                allOk = false;
+                continue;
+              }
+              killApp(item.exe);
+              await new Promise((r) => setTimeout(r, 2000));
+              let pages = 0;
+              let error = '';
+              try {
+                await ensureWorker(item);
+                pages = ((await targets(item.port)) || []).filter((t) => t.type === 'page').length;
+              } catch (err) {
+                error = err.message;
+              }
+              team.event(board, 'worker/restart', `${item.name} 已重启（端口 ${item.port}，页面 ${pages}）`);
+              if (error) {
+                allOk = false;
+                lines.push(`- ${item.name}：启动失败（${error}）`);
+              } else if (pages === 0) {
+                allOk = false;
+                lines.push(`- ${item.name}：端口已开但还没有页面（可能还在加载，稍后 ping 一下）`);
+              } else {
+                lines.push(`- ${item.name}：✅ 端口 ${item.port}，页面 ${pages}`);
+              }
             }
-            return { ok: true, text: `${worker.name} 已带调试端口重启，页面目标 ${pages} 个。`, data: { pages } };
+            team.save(board);
+            return {
+              ok: allOk,
+              text: ['重启完成：', ...lines].join('\n'),
+              data: { restarted: workerList.map((item) => item.id) },
+            };
           }
           // ping: a real round trip, so a broken selector or a half-finished
           // completion rule shows up here instead of in the middle of a project.
