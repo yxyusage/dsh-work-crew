@@ -467,11 +467,12 @@ export function apply(ctx) {
           }
         }
 
-        // Implementation tasks need a real workspace; a chat-mode app would answer
-        // confidently while writing nothing.
+        // Only code-writing tasks need a real workspace. A discussion or report task
+        // writes prose into outbox and must not be blocked by an approval-mode hint.
         const ready = await checkReady(worker, board.project);
-        if (!ready.ok && task.write.length) {
-          throw new Error(`${worker.name} 没就绪，拒绝派实现任务：${ready.reason || '工作区未选中'}\n→ ${ready.hint || '先切工作区/权限'}`);
+        const codeWrite = task.write.filter((ns) => !/^(discussion|docs?|review|report|notes?|briefs?)(:|$)/i.test(ns));
+        if (!ready.ok && codeWrite.length) {
+          throw new Error(`${worker.name} 没就绪，拒绝派实现任务：${ready.reason || '当前模式不能读写本地文件'}\n→ ${ready.hint || '先切工作区/权限'}`);
         }
 
         // Machine-wide channel lock: one app, one typist — across projects too.

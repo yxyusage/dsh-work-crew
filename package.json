@@ -1,6 +1,6 @@
 {
   "name": "dsh-work-crew",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "DSH 插件：把任务派给本机的豆包 / WorkBuddy / ZCode / Qoder，用任务板与产物锁组织一支有纪律的 AI 班组。",
   "type": "module",
   "license": "MIT",

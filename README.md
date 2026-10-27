@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — one prompt, a working team" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.5.0-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.5.1-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -99,6 +99,27 @@ T4  docs                Qoder       write:docs          dependsOn: [T1, T2]
   current one is collected.
 - **Budget.** `deadlineMin` (default 45) flags a stalled task; at twice the budget it is blocked and its locks released.
 - **Artifacts are checked.** `expect` paths must exist before a task counts as done; the outbox file is added automatically.
+
+## Screenshots: two traps that produce false reviews
+
+**Desktop shots** need a virtual clock, or you capture the page mid-fade:
+
+```powershell
+chrome --headless=new --force-prefers-reduced-motion --virtual-time-budget=3000 `
+  --window-size=1440,3000 --screenshot=shots/full.png index.html
+```
+
+**Mobile width must be emulated, not just resized.** `--window-size=390,844` sets the *window*, but the layout still
+uses the desktop viewport (often 980px), so the screenshot shows a cropped desktop page — which reads as "the layout
+overflows" and sends a reviewer chasing a bug that does not exist. Emulate the device over CDP instead:
+
+```js
+await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+const shot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+```
+
+Verify with `document.documentElement.scrollWidth` before believing an overflow report: if it equals the viewport
+width, the layout is fine and the screenshot is lying.
 
 ## Guardrails
 
