@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — 一个指令，一支班组" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.3.0-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.4.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -94,6 +94,17 @@ T4  写文档         Qoder       write:docs           dependsOn: [T1, T2]
 - **排队不是卡死。** worker 忙时任务进 `queued`：不占锁、不计超时；当前任务收单后自动顶上。
 - **有预算。** `deadlineMin`（默认 45 分钟）到点标停滞，两倍时间自动 blocked 并释放锁。
 - **验收产物。** `expect` 里的路径必须真实存在才算完成；`outbox/<id>.md` 会自动加进去。
+
+## 四道闸门
+
+从「模型说完成了」到「任务真的完成」之间，有四道检查：
+
+| 闸门 | 作用 |
+|---|---|
+| `review: true` | 评审只拿到 **需求 + `git diff` + 验收标准**，并被明确要求**不要读实现者的报告**。读了实现者的叙述，就会继承他的盲区。 |
+| `verify: "pnpm build"` | 收单前在项目里**真跑一次**验收命令。红了就 blocked——没有绿色构建，就没有 done。 |
+| `risk: "high"` | 高风险改动（鉴权/支付/CI/密钥/安装器）**不能自己放行**：收单只回「待确认」，必须人再调一次 `confirm: true`。 |
+| `rubric.md` + 评审轮次 | `team_init` 生成项目验收标准，评审任务自动带上；同一产物从第 4 轮评审起，简报会先问「是不是方案本身有问题」，而不是继续要补丁清单。 |
 
 ## 前置条件
 

@@ -9,6 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { Team } from './lib/team.js';
 import { ask, waitAnswer, waitAnyAnswer, ensureWorker, killApp, targets, processRunning, checkReady } from './lib/cdp.js';
 
@@ -67,6 +68,28 @@ const DEFAULT_MISSION = `# 项目目标
 - 代码：
 - 文档：
 - 设计稿：
+`;
+
+const DEFAULT_RUBRIC = `# 验收标准（评审任务默认带上）
+
+## 必须通过
+
+- 改动能跑起来：构建/启动命令成功，控制台无报错。
+- 需求逐条达成；每条需求都能指到具体文件或界面位置。
+- 没有偷偷引入新的外部依赖、外链资源或密钥。
+- 与现有代码风格、目录结构一致。
+
+## 必须拒绝
+
+- 声称完成，但产物（文件 / 截图）不存在的。
+- 只改文案不改行为，却声称修复了逻辑问题。
+- 把「我没验证」写成「已验证」。
+
+## 输出要求
+
+- 问题按 P0 / P1 / P2 分级，每条指到 \`文件:行号\`。
+- 同类问题合并成一条；风格偏好不写。
+- 最后给结论：通过 / 不通过。
 `;
 
 const DEFAULT_ROLES = `# 团队分工
@@ -150,6 +173,8 @@ export function apply(ctx) {
             '',
           ].join('\n'), 'utf8');
         }
+        const rubricFile = path.join(dir, '.dsh-team', 'rubric.md');
+        if (!fs.existsSync(rubricFile)) fs.writeFileSync(rubricFile, DEFAULT_RUBRIC, 'utf8');
         team.save(board);
         return {
           ok: true,
@@ -192,6 +217,20 @@ export function apply(ctx) {
         },
         read: { type: 'array', items: { type: 'string' }, description: '要读的产物命名空间，规则同上。' },
         deadlineMin: { type: 'integer', description: '软超时（分钟），默认 45。超过标记停滞，超过两倍自动 blocked 并释放锁。' },
+        review: {
+          type: 'boolean',
+          description: '评审任务：简报只给需求 + git diff + 验收标准（rubric），并禁止读实现者的 outbox，避免自证与先入为主。',
+        },
+        verify: {
+          type: 'string',
+          description: '验收命令（在项目目录执行，例如 "pnpm build"）。收单时先跑它，失败就 blocked、不允许 done。留空表示不跑。',
+        },
+        risk: {
+          type: 'string',
+          enum: ['low', 'medium', 'high'],
+          description: '风险等级，默认 medium。high（支付/鉴权/密钥/CI/安装器）必须人工确认，'
+            + '收单时要传 confirm:true，插件不会自己放行。',
+        },
         expect: {
           type: 'array',
           items: { type: 'string' },
@@ -313,7 +352,24 @@ export function apply(ctx) {
           );
         }
 
-        const brief = team.brief(board, task);
+        // Review tasks get a clean room: requirement + diff + rubric, nothing else.
+        let diff = '';
+        let reviewRound = 0;
+        if (task.review) {
+          const overlaps = (a, b) => a === b || a.startsWith(`${b}:`) || b.startsWith(`${a}:`);
+          reviewRound = board.tasks.filter((item) => item.review && item.status === 'done'
+            && (item.read || []).some((r) => (task.read || []).some((tr) => overlaps(r, tr)))).length + 1;
+          task.reviewRound = reviewRound;
+          try {
+            const stat = execSync('git diff --stat', { cwd: board.dir, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'ignore'] });
+            const full = execSync('git diff', { cwd: board.dir, encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'ignore'] });
+            diff = `${(stat || '').trim()}\n\n${full}`.trim().slice(0, 8000);
+          } catch {
+            // Not a git repo, or the working tree is clean: the reviewer still reads files.
+          }
+        }
+
+        const brief = team.brief(board, task, { diff, reviewRound });
         const briefFile = path.join(board.dir, '.dsh-team', 'briefs', `${task.id}.md`);
         fs.writeFileSync(briefFile, brief, 'utf8');
 
@@ -375,6 +431,10 @@ export function apply(ctx) {
             + 'blockers=只回摘要头部 + 阻塞/风险行；full=整篇拉回（慎用）。',
         },
         summaryChars: { type: 'integer', description: '仅 full/chat 时用：摘要长度上限，默认 1200。' },
+        confirm: {
+          type: 'boolean',
+          description: '高风险任务（risk=high）收尾时必须传 true，表示人已经确认过；不传则只报告"待确认"，不收尾。',
+        },
       },
       [],
       async (args, exec) => {
@@ -486,6 +546,49 @@ export function apply(ctx) {
             text: `${task.id} 交了结果，但声明的产物不存在：${missing.join('、')}\n`
               + '已标记 blocked 并释放锁。确认后重派（team_reopen + team_dispatch）或先看看 worker 到底写了什么。',
             data: { taskId: task.id, missing },
+          };
+        }
+
+        // Evidence before verdict: if the task declared an acceptance command,
+        // run it. A green chat answer does not outrank a red build.
+        if (task.verify) {
+          let verifyOk = true;
+          let tail = '';
+          try {
+            const out = execSync(task.verify, { cwd: board.dir, encoding: 'utf8', timeout: 300000, stdio: ['ignore', 'pipe', 'pipe'] });
+            tail = String(out || '').trim().slice(-800);
+          } catch (error) {
+            verifyOk = false;
+            tail = `${error.stdout || ''}${error.stderr || ''}`.trim().slice(-800) || error.message;
+          }
+          task.verifyResult = { ok: verifyOk, command: task.verify, tail };
+          team.event(board, 'task/verify', `${task.id} 验收命令${verifyOk ? '通过' : '失败'}：${task.verify}`, { taskId: task.id });
+          if (!verifyOk) {
+            task.status = 'blocked';
+            task.error = `验收命令失败：${task.verify}`;
+            team.releaseLocks(board, task);
+            team.releaseChannel(task.worker, task.id);
+            team.save(board);
+            return {
+              ok: false,
+              text: `${task.id} 的验收命令失败：${task.verify}\n--- 输出（尾部）---\n${tail}\n`
+                + '任务已 blocked、锁已释放。修好后可以重派，或先核对是不是命令本身不对。',
+              data: { taskId: task.id, verify: false, tail },
+            };
+          }
+        }
+
+        // High-risk work never approves itself: auth/payment/CI/secrets need an
+        // explicit human confirmation, not another model's opinion.
+        if (task.risk === 'high' && args?.confirm !== true) {
+          team.event(board, 'task/await-approval', `${task.id} 高风险，等待人工确认`, { taskId: task.id });
+          team.save(board);
+          return {
+            ok: false,
+            text: `${task.id} 是高风险任务（${task.title}）。产物和验收都过了，但它不会自己收尾。\n`
+              + '确认没问题就再调一次：team_collect {"taskId":"' + task.id + '","confirm":true}\n'
+              + '不确定就先自己看一眼 diff / 运行结果，再决定要不要放行。',
+            data: { taskId: task.id, awaitingApproval: true },
           };
         }
 
