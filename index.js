@@ -243,6 +243,8 @@ export function apply(ctx) {
     } else {
       const picked = knowledgeFor(board, task);
       task.knowledgeEntries = picked.map((entry) => entry.id);
+      // Mechanical rules become gates, not advice: they run at collect time.
+      task.gates = [...new Set(picked.flatMap((entry) => entry.gates || []))];
       references = renderKnowledge(picked);
     }
     delete task.pendingReferences;
@@ -722,7 +724,7 @@ export function apply(ctx) {
         if (codeNamespaces.length && fs.existsSync(path.join(board.dir, 'index.html'))) {
           try {
             const { check } = await import('./lib/runtime.js');
-            const runtime = await check({ target: path.join(board.dir, 'index.html'), widths: [1440, 390] });
+            const runtime = await check({ target: path.join(board.dir, 'index.html'), widths: [1440, 390], gates: task.gates || [] });
             task.runtimeCheck = { ok: runtime.problems.length === 0, problems: runtime.problems };
             if (runtime.problems.length) {
               task.status = 'blocked';
@@ -1202,6 +1204,10 @@ export function apply(ctx) {
         target: { type: 'string', description: '页面路径或 URL，默认 index.html。' },
         widths: { type: 'array', items: { type: 'integer' }, description: '要检查的视口宽度，默认 [1440, 390]。' },
         smoke: { type: 'string', description: '可选：一段在页面里执行的 JS（如点按钮后读结果），返回值会带回来。' },
+        gates: {
+          type: 'array', items: { type: 'string' },
+          description: '机械规则闸门：reduced-motion / focus-visible / viewport / img-alt / no-external / no-div-click。',
+        },
       },
       [],
       async (args, exec) => {
@@ -1214,6 +1220,7 @@ export function apply(ctx) {
           target,
           widths: Array.isArray(args?.widths) && args.widths.length ? args.widths : [1440, 390],
           smoke: args?.smoke || '',
+          gates: Array.isArray(args?.gates) ? args.gates : ['reduced-motion', 'focus-visible', 'viewport', 'img-alt', 'no-external'],
         });
         team.event(board, 'check', `${path.basename(target)} ${result.problems.length ? 'FAIL' : 'PASS'}`);
         team.save(board);
@@ -1223,6 +1230,9 @@ export function apply(ctx) {
         ];
         if (result.errors.length) lines.push(`控制台：${result.errors.slice(0, 3).join(' ｜ ')}`);
         lines.push(`视口：${result.widths.map((w) => `${w.width}px→scrollWidth ${w.scrollWidth}`).join('，')}`);
+        if (result.gates?.length) {
+          lines.push(`闸门：${result.gates.map((gate) => `${gate.id} ${gate.ok ? '✓' : `✗ ${gate.detail}`}`).join(' / ')}`);
+        }
         if (result.smoke !== undefined) lines.push(`冒烟返回：${JSON.stringify(result.smoke).slice(0, 300)}`);
         return { ok: result.problems.length === 0, text: lines.join('\n'), data: { problems: result.problems } };
       },

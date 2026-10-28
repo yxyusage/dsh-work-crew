@@ -4,6 +4,7 @@ tags: frontend, ui, component, form, layout
 keywords: 页面,前端,组件,表单,布局,界面,按钮,输入框,卡片
 url: https://ui.shadcn.com/docs/ai-elements
 use: 抄结构不抄皮肤：先看它怎么组织信息层级和状态，再定自己的视觉
+gates: viewport
 avoid: 直接把 demo 的样式贴过来；组件有了、状态没做
 
 - 先定正文宽度（约 65 字符 ≈ 640px），再排栅格；不要先画 12 栏再塞内容。

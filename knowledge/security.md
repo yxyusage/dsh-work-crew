@@ -4,6 +4,7 @@ tags: backend, security, audit
 keywords: 安全,鉴权,权限,密钥,注入,漏洞,审计
 url: https://owasp.org/www-project-top-ten/
 use: 用 OWASP Top 10 逐条过，别凭印象说"应该没问题"
+gates: no-external
 avoid: 把校验放前端；日志里打 token；错误信息暴露内部结构
 
 - 所有输入在服务端边界校验，白名单优先。

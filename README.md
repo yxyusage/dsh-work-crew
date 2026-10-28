@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — one prompt, a working team" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.9.0-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.10.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -175,6 +175,54 @@ team_knowledge { "action": "add", "id": "brand-guide", "title": "品牌规范", 
   "url": "https://...", "use": "配色只从这 5 个色里选", "avoid": "自创渐变",
   "rules": ["主色 #1f6feb，只用于主按钮", "正文色 #0f1115 / #e6e8eb"] }
 ```
+
+## Workflow
+
+```mermaid
+flowchart TB
+  A["team_add_task<br/>tags · locks · expect · verify · risk"] --> B{"能否并行？<br/>不同文件 / 不同 worker"}
+  B -- 是 --> C["team_dispatch taskIds<br/>一次派多个"]
+  B -- 否 --> D["team_dispatch"]
+  C --> E["简报 = 需求 + diff + 参考资料 + 对照清单"]
+  D --> E
+  E --> F["worker 干活<br/>正文写 outbox/&lt;id&gt;.md · 聊天只回 DONE"]
+  F --> G{"收单闸门"}
+  G -- 控制台报错 / 溢出 --> H["blocked 打回"]
+  G -- expect 缺失 --> H
+  G -- verify 命令失败 --> H
+  G -- 知识库机械规则 --> H
+  G -- 全部通过 --> I["评审：快照 + 对照清单逐条判"]
+  I --> J{"通过？"}
+  J -- 否 --> K["修复任务<br/>按文件并行"]
+  K --> F
+  J -- 是 --> L["team_bundle 合并单文件<br/>自动复检"]
+  L --> M["交付"]
+```
+
+Four gates stand between "the model says done" and done: **artifacts exist** (`expect`), **the build passes** (`verify`),
+**the page actually runs** (console errors + overflow + mechanical gates), and **a reviewer judges the same checklist the
+implementer was given**. Any failure blocks the task instead of passing it downstream.
+
+## Token economics
+
+Measured on a real run (18 tasks, one landing page). Method: UTF-8 3 bytes per Chinese character, 1 token ≈ 1.5 characters.
+
+| Quantity | Measured | Why it matters |
+|---|---|---|
+| Worker output kept on disk | **115,188 bytes** in 17 outbox files ≈ 25.6k tokens | With chat delivery this enters the orchestrator's context and is re-sent on **every** later step |
+| Briefs sent to workers | 57,864 bytes ≈ 12.9k tokens | Sent over CDP straight into the apps — never touches the orchestrator's context |
+| Average single output | 6,776 bytes ≈ 1.5k tokens | One read costs more than the whole dispatch brief |
+| Dispatch calls | 8 calls for 18 tasks (`taskIds` batch) | ~10 fewer steps than one call per task |
+| Collect calls | 10 calls for 18 tasks (`taskIds` batch) | Whoever finishes first returns; no polling loop |
+| Restarts | 1 call for four apps (`restart all`) | Was 4 steps, each re-sending the conversation |
+| Screenshots | path only, image never read | Each image read costs ~1–2k tokens and stays in context |
+
+The arithmetic that matters: a step costs *context size × 1*. Keeping 25.6k tokens of worker prose out of the context
+saves that amount on every subsequent step. Over a 40-step run that is roughly **a million token-equivalents of context
+traffic** that never happens (mostly cache reads — cheap, but not free).
+
+What it costs: each dispatch carries ~800 bytes of references plus a ~2k-token checklist to the worker. That is paid to
+the worker's API, not to the orchestrator.
 
 ## Requirements
 

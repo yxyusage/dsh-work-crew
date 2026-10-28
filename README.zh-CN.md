@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — 一个指令，一支班组" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.9.0-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.10.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -151,6 +151,49 @@ team_knowledge { "action": "add", "id": "brand-guide", "title": "品牌规范", 
   "use": "配色只从这 5 个色里选", "avoid": "自创渐变",
   "rules": ["主色 #1f6feb，只用于主按钮", "正文色 #0f1115 / #e6e8eb"] }
 ```
+
+## 工作流
+
+```mermaid
+flowchart TB
+  A["team_add_task<br/>tags · 锁 · expect · verify · risk"] --> B{"能否并行？<br/>不同文件 / 不同 worker"}
+  B -- 是 --> C["team_dispatch taskIds<br/>一次派多个"]
+  B -- 否 --> D["team_dispatch"]
+  C --> E["简报 = 需求 + diff + 参考资料 + 对照清单"]
+  D --> E
+  E --> F["worker 干活<br/>正文写 outbox/&lt;id&gt;.md · 聊天只回 DONE"]
+  F --> G{"收单闸门"}
+  G -- 控制台报错 / 溢出 --> H["blocked 打回"]
+  G -- expect 缺失 --> H
+  G -- verify 命令失败 --> H
+  G -- 知识库机械规则 --> H
+  G -- 全部通过 --> I["评审：快照 + 对照清单逐条判"]
+  I --> J{"通过？"}
+  J -- 否 --> K["修复任务<br/>按文件并行"]
+  K --> F
+  J -- 是 --> L["team_bundle 合并单文件<br/>自动复检"]
+  L --> M["交付"]
+```
+
+从「模型说完成了」到「真的完成」之间有四道闸门：**产物存在**（expect）、**构建通过**（verify）、**页面真的能跑**（控制台 + 溢出 + 机械规则）、**评审按实现者拿到的同一份清单逐条判**。任何一道不过就 blocked，不会往下游传。
+
+## Token 账（实测）
+
+数据来自一次真实运行（18 个任务，一个落地页）。口径：UTF-8 中文 3 字节/字，1 token ≈ 1.5 字。
+
+| 项目 | 实测 | 说明 |
+|---|---|---|
+| 产出留在磁盘 | 17 个 outbox 共 **115,188 字节** ≈ 2.56 万 token | 若走聊天投递，这些会永久留在调度者上下文，**每步重发一次** |
+| 简报发给 worker | 57,864 字节 ≈ 1.29 万 token | 走 CDP 直接进软件，**不进 DSH 上下文** |
+| 单份产出平均 | 6,776 字节 ≈ 1.5k token | 读一份的成本比整份简报还高 |
+| 派单调用 | 18 个任务用了 8 次（批量 taskIds） | 比逐个派省约 10 步 |
+| 收单调用 | 18 个任务用了 10 次（批量 taskIds） | 谁先完成先返回，不轮询 |
+| 重启 | 四家一次（restart all） | 原来要 4 步，每步重发一遍对话 |
+| 截图 | 只回路径，图片不进上下文 | 每读一张图约 1–2k token，且永久留存 |
+
+关键算式：**一步的成本 = 上下文大小 × 1**。把 2.56 万 token 的产出挡在上下文外，之后每一步都省这一份；跑 40 步就是约 **100 万 token 当量的上下文流量**没发生（大部分是缓存读，便宜但不是免费）。
+
+代价也要说清：每次派单会多带约 800 字节参考 + 一份约 2k token 的对照清单给 worker——这笔钱花在 worker 的 API 上，不花在 DSH 上。
 
 ## 前置条件
 

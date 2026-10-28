@@ -4,6 +4,7 @@ tags: frontend, motion, animation
 keywords: 动画,动效,过渡,切换,展开,交互
 url: https://github.com/zhoulinhua0-star/smooth-option-switcher
 use: 切换类交互用共享元素过渡（指示块滑过去），不要整块淡出再淡入
+gates: reduced-motion
 avoid: 每个元素都加 transition；duration 800ms 以上；用 left/top 做位移
 
 - 时长：状态反馈 120–200ms，面板展开 240–360ms，页面级过渡不超过 400ms。
