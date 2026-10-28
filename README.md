@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — one prompt, a working team" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.7.1-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.8.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -130,6 +130,32 @@ Six checks stand between "the model says it is done" and "the task is done":
 | `risk: "high"` | High-risk work (auth, payments, CI, secrets, installers) **never self-approves**: collecting it only reports "awaiting approval" until a human re-collects with `confirm: true`. |
 | `rubric.md` + review round counter | `team_init` writes the project's acceptance rubric; every review carries it. From the 4th review of the same artifact, the brief asks whether the *plan* is wrong instead of requesting another patch list. |
 | `crossCheck: true` | After a review, a **second reviewer** gets the findings and votes on each one: holds / false positive / not enough evidence. Only confirmed issues survive. |
+
+## Knowledge base
+
+"Make it look good" produces nothing. "Look at this, apply it like so, ship when these three rules hold" changes the output.
+
+`team_knowledge` ships curated references; the matching ones are injected into the brief automatically — authors do not have to remember to ask.
+
+| Entry | What it enforces | Source |
+|---|---|---|
+| `de-ai-slop` | no purple gradients, no three-card hero, no emoji icons, real content instead of filler | [anti-slop checklist](https://github.com/infometa/workbuddyskills/blob/main/experts/design-engine/skills/quality-review/references/anti-slop-checklist.md) |
+| `frontend-ui` | component structure and the four states (default/hover/focus/disabled) | [shadcn AI Elements](https://ui.shadcn.com/docs/ai-elements) |
+| `motion` | shared-element transitions, 120–360 ms, transform/opacity only, reduced-motion fallback | [smooth-option-switcher](https://github.com/zhoulinhua0-star/smooth-option-switcher) |
+| `empty-states` | why it is empty, what to do now, what you will get | [Carbon patterns](https://www.carbondesignsystem.com/building-blocks/core/patterns/empty-states) |
+| `typography-color` | modular scale, 16–18px body, 4.5:1 contrast, no pure black | [type-scale](https://type-scale.com) |
+| `copywriting` | verbs on buttons, examples instead of adjectives, no judgement | [NN/g microcopy](https://www.nngroup.com/articles/microcopy/) |
+| `a11y` | keyboard path, visible focus, button semantics | [web.dev a11y](https://web.dev/learn/accessibility) |
+
+Matching: explicit `tags` on the task win; otherwise keywords in the title and brief decide. At most 4 entries, each rendered as link + how to use + what not to do + 3 rules — small enough to stay cheap.
+
+Project-specific entries go in `.dsh-team/knowledge/<id>.md` and override built-ins by id:
+
+```text
+team_knowledge { "action": "add", "id": "brand-guide", "title": "品牌规范", "tags": ["frontend","color"],
+  "url": "https://...", "use": "配色只从这 5 个色里选", "avoid": "自创渐变",
+  "rules": ["主色 #1f6feb，只用于主按钮", "正文色 #0f1115 / #e6e8eb"] }
+```
 
 ## Requirements
 

@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — 一个指令，一支班组" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.7.1-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.8.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -109,6 +109,32 @@ T4  写文档         Qoder       write:docs           dependsOn: [T1, T2]
 | `risk: "high"` | 高风险改动（鉴权/支付/CI/密钥/安装器）**不能自己放行**：收单只回「待确认」，必须人再调一次 `confirm: true`。 |
 | `rubric.md` + 评审轮次 | `team_init` 生成项目验收标准，评审任务自动带上；同一产物从第 4 轮评审起，简报会先问「是不是方案本身有问题」，而不是继续要补丁清单。 |
 | `crossCheck: true` | 评审出问题后，再派**第二个评审者**逐条投票：成立 / 误报 / 证据不足。只留成立的。 |
+
+## 知识库
+
+「做得好看点」等于没说。「看这个，这么用，这三条满足了才算完」才会有变化。
+
+`team_knowledge` 内置一批参考，派单时**按标签自动匹配**带进简报，不用每次手动点名。
+
+| 条目 | 管什么 | 出处 |
+|---|---|---|
+| `de-ai-slop` | 紫蓝渐变、三卡片首屏、emoji 当图标、假占位——一律不用 | [反 AI 味清单](https://github.com/infometa/workbuddyskills/blob/main/experts/design-engine/skills/quality-review/references/anti-slop-checklist.md) |
+| `frontend-ui` | 组件结构与四态（默认/hover/focus/disabled） | [shadcn AI Elements](https://ui.shadcn.com/docs/ai-elements) |
+| `motion` | 共享元素过渡、120–360ms、只动 transform/opacity、必须降级 | [smooth-option-switcher](https://github.com/zhoulinhua0-star/smooth-option-switcher) |
+| `empty-states` | 为什么空、现在做什么、能得到什么 | [Carbon 模式](https://www.carbondesignsystem.com/building-blocks/core/patterns/empty-states) |
+| `typography-color` | 字号阶梯、正文 16–18px、对比度 4.5:1 | [type-scale](https://type-scale.com) |
+| `copywriting` | 按钮用动词、给例子不给形容词、不评判 | [NN/g 微文案](https://www.nngroup.com/articles/microcopy/) |
+| `a11y` | 键盘可达、focus 可见、用 button 不用 div | [web.dev](https://web.dev/learn/accessibility) |
+
+匹配规则：任务上的 `tags` 优先；没写就看标题和简报里的关键词。最多 4 条，每条 = 链接 + 怎么用 + 别这么做 + 3 条规则，够用又不至于把简报撑爆。
+
+项目专属条目放 `.dsh-team/knowledge/<id>.md`，同 id 覆盖内置条目：
+
+```text
+team_knowledge { "action": "add", "id": "brand-guide", "title": "品牌规范", "tags": ["frontend","color"],
+  "use": "配色只从这 5 个色里选", "avoid": "自创渐变",
+  "rules": ["主色 #1f6feb，只用于主按钮", "正文色 #0f1115 / #e6e8eb"] }
+```
 
 ## 前置条件
 

@@ -10,7 +10,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { Team } from './lib/team.js';
+import { loadAll, select, render as renderKnowledge } from './lib/knowledge.js';
 import { ask, waitAnswer, waitAnyAnswer, ensureWorker, killApp, targets, processRunning, checkReady } from './lib/cdp.js';
 
 export const inject = ['tools', 'webServer'];
@@ -110,6 +112,30 @@ export function apply(ctx) {
 
   const boardFor = async (exec) => team.board(await team.resolveDir(exec?.agent));
 
+  const pluginRoot = path.dirname(fileURLToPath(import.meta.url));
+
+  /**
+   * Curated references for this task, rendered for the brief.
+   *
+   * "Make it look good" produces nothing; "look at this and here is how to apply
+   * it" changes the output. Entries are matched by task tags or by keywords in
+   * the task text, so authors do not have to remember to ask.
+   */
+  function referenceText(board, task) {
+    try {
+      const entries = loadAll(pluginRoot, board.dir);
+      const picked = select(entries, {
+        tags: task.tags || [],
+        text: `${task.title} ${task.note || ''}`,
+        limit: 4,
+      });
+      return renderKnowledge(picked);
+    } catch {
+      return '';
+    }
+  }
+
+
   /** Run a git command in the project, or return '' when this is not a repo. */
   function gitOut(board, args, timeout = 60000) {
     try {
@@ -184,11 +210,13 @@ export function apply(ctx) {
       : '';
     delete task.pendingDiff;
     delete task.pendingSnapshot;
+    const references = task.pendingReferences ?? referenceText(board, task);
+    delete task.pendingReferences;
     if (snapshotDir) {
       task.snapshotDir = snapshotDir;
       task.readAdvisory = true;
     }
-    const brief = team.brief(board, task, { diff, snapshotDir, reviewRound: task.reviewRound || 1 });
+    const brief = team.brief(board, task, { diff, snapshotDir, reviewRound: task.reviewRound || 1, references });
     const briefFile = path.join(board.dir, '.dsh-team', 'briefs', `${task.id}.md`);
     fs.writeFileSync(briefFile, brief, 'utf8');
     team.acquireLocks(board, task);
@@ -359,6 +387,9 @@ export function apply(ctx) {
         }
         const rubricFile = path.join(dir, '.dsh-team', 'rubric.md');
         if (!fs.existsSync(rubricFile)) fs.writeFileSync(rubricFile, DEFAULT_RUBRIC, 'utf8');
+        // Project-specific knowledge entries live here; they override built-ins by id.
+        const knowledgeDir = path.join(dir, '.dsh-team', 'knowledge');
+        if (!fs.existsSync(knowledgeDir)) fs.mkdirSync(knowledgeDir, { recursive: true });
         team.save(board);
         return {
           ok: true,
@@ -438,6 +469,11 @@ export function apply(ctx) {
           type: 'array',
           items: { type: 'string' },
           description: '本任务必读的设计/契约文档路径。',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '知识库匹配标签，例如 ["frontend","ui","motion"]。不传则按标题与简报关键词自动匹配。',
         },
         seeUi: {
           type: 'boolean',
@@ -1212,6 +1248,57 @@ export function apply(ctx) {
           text: `已合并：${path.basename(out)}（${Math.round(Buffer.byteLength(html) / 1024)} KB）${verdict}`,
           data: { out, parts, ok },
         };
+      },
+    ),
+
+    defineTool(
+      'team_knowledge',
+      '协作知识库：内置的设计/写法参考（去 AI 味、界面结构、动效、空状态、字体配色、文案、可访问性）。'
+      + '派单时会按任务标签自动带进简报；这里用于查看、检索、以及给项目补充自己的参考。',
+      {
+        action: { type: 'string', enum: ['list', 'search', 'add'], description: '默认 list。' },
+        query: { type: 'string', description: 'search 时的关键词，例如「动效」「文案」。' },
+        id: { type: 'string', description: 'add 时的条目 id，例如 brand-guide。' },
+        title: { type: 'string', description: 'add 时的标题。' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'add 时的匹配标签。' },
+        url: { type: 'string', description: 'add 时的参考链接。' },
+        use: { type: 'string', description: 'add 时的一句话用法。' },
+        avoid: { type: 'string', description: 'add 时的一句话禁忌。' },
+        rules: { type: 'array', items: { type: 'string' }, description: 'add 时的规则条目（每条一行）。' },
+      },
+      [],
+      async (args, exec) => {
+        const board = await boardFor(exec);
+        const action = args?.action || 'list';
+        if (action === 'add') {
+          const id = String(args?.id || '').trim();
+          if (!/^[a-z0-9-]{2,40}$/i.test(id)) throw new Error('id 只能是字母数字和短横线（2~40 位），例如 brand-guide');
+          const dir = path.join(board.dir, '.dsh-team', 'knowledge');
+          fs.mkdirSync(dir, { recursive: true });
+          const lines = [
+            `# ${id}`,
+            `title: ${args?.title || id}`,
+            `tags: ${(args?.tags || []).join(', ')}`,
+            `url: ${args?.url || ''}`,
+            `use: ${args?.use || ''}`,
+            `avoid: ${args?.avoid || ''}`,
+            '',
+            ...(args?.rules || []).map((rule) => `- ${rule}`),
+            '',
+          ];
+          fs.writeFileSync(path.join(dir, `${id}.md`), lines.join('\n'), 'utf8');
+          team.event(board, 'knowledge/add', `${id} 加入项目知识库`);
+          team.save(board);
+          return { ok: true, text: `已写入 .dsh-team/knowledge/${id}.md，之后匹配到标签的任务会自动带上。`, data: { id } };
+        }
+        const entries = loadAll(pluginRoot, board.dir);
+        if (action === 'search') {
+          const picked = select(entries, { text: String(args?.query || ''), limit: 5 });
+          if (!picked.length) return { ok: true, text: `没有匹配「${args?.query || ''}」的条目。用 list 看全部。`, data: { count: 0 } };
+          return { ok: true, text: renderKnowledge(picked, { maxRules: 2 }), data: { count: picked.length } };
+        }
+        const lines = entries.map((entry) => `- ${entry.id}｜${entry.title}｜tags: ${entry.tags.join(',')}${entry.url ? `｜${entry.url}` : ''}`);
+        return { ok: true, text: `${entries.length} 条：\n${lines.join('\n')}\n\n项目专属条目放 .dsh-team/knowledge/，与内置条目按 id 覆盖。`, data: { count: entries.length } };
       },
     ),
   ];
