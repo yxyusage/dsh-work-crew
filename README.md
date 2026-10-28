@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — one prompt, a working team" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.8.0-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.9.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -147,7 +147,26 @@ Six checks stand between "the model says it is done" and "the task is done":
 | `copywriting` | verbs on buttons, examples instead of adjectives, no judgement | [NN/g microcopy](https://www.nngroup.com/articles/microcopy/) |
 | `a11y` | keyboard path, visible focus, button semantics | [web.dev a11y](https://web.dev/learn/accessibility) |
 
-Matching: explicit `tags` on the task win; otherwise keywords in the title and brief decide. At most 4 entries, each rendered as link + how to use + what not to do + 3 rules — small enough to stay cheap.
+Beyond the interface, the same mechanism covers backend and review work:
+
+| Entry | What it enforces | Source |
+|---|---|---|
+| `api-design` | plural resources, RFC 9457 errors, idempotent writes | [Google AIP](https://google.aip.dev/) |
+| `backend-patterns` | 12-factor, when splitting a service is justified | [microservices.io](https://microservices.io/patterns/index.html) |
+| `sql-data` | index by query, read the plan before touching indexes | [use-the-index-luke](https://use-the-index-luke.com/) |
+| `testing` | test pyramid, regression test per bug | [Fowler](https://martinfowler.com/articles/practical-test-pyramid.html) |
+| `code-review` | five things to look at, two grades of comment | [Google eng-practices](https://google.github.io/eng-practices/review/) |
+| `security` | server-side validation, auth at every entry, secrets out of logs | [OWASP Top 10](https://owasp.org/www-project-top-ten/) |
+| `observability` | structured logs, metrics, actionable alerts | [OpenTelemetry](https://opentelemetry.io/docs/) |
+| `technical-writing` | one page, one purpose (tutorial/how-to/reference/explanation) | [Diátaxis](https://diataxis.fr/) |
+| `web-performance` | measure first: LCP/INP/CLS | [HPBN](https://hpbn.co/) |
+
+Matching: explicit `tags` on the task win; otherwise keywords in the title and brief decide. **The worker matters too** —
+Doubao is held to design/motion, Qoder to security/structure, ZCode to copy/docs, WorkBuddy to implementation. At most 4
+entries, each rendered as link + how to use + what not to do + 3 rules.
+
+And the loop closes at review time: a review task receives **the checklist the implementer was given**, up to 8 rules,
+each to be judged `done / not done (with location) / not applicable`. That turns "check it" into findings you can act on.
 
 Project-specific entries go in `.dsh-team/knowledge/<id>.md` and override built-ins by id:
 

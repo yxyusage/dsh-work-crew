@@ -3,7 +3,7 @@
 <img src="assets/hero.svg" alt="dsh-work-crew — 一个指令，一支班组" width="100%">
 
 <p align="center">
-  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.8.0-blue"></a>
+  <a href="https://github.com/yxyusage/dsh-work-crew"><img alt="version" src="https://img.shields.io/badge/version-0.9.0-blue"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/DSH-Desktop%20%2B%20Web-6b5cff">
   <img alt="workers" src="https://img.shields.io/badge/workers-4-orange">
@@ -126,7 +126,23 @@ T4  写文档         Qoder       write:docs           dependsOn: [T1, T2]
 | `copywriting` | 按钮用动词、给例子不给形容词、不评判 | [NN/g 微文案](https://www.nngroup.com/articles/microcopy/) |
 | `a11y` | 键盘可达、focus 可见、用 button 不用 div | [web.dev](https://web.dev/learn/accessibility) |
 
-匹配规则：任务上的 `tags` 优先；没写就看标题和简报里的关键词。最多 4 条，每条 = 链接 + 怎么用 + 别这么做 + 3 条规则，够用又不至于把简报撑爆。
+前端之外，同一套机制也覆盖后端与评审：
+
+| 条目 | 管什么 | 出处 |
+|---|---|---|
+| `api-design` | 名词复数资源、RFC 9457 错误、写操作幂等 | [Google AIP](https://google.aip.dev/) |
+| `backend-patterns` | 12-Factor、什么时候才该拆服务 | [microservices.io](https://microservices.io/patterns/index.html) |
+| `sql-data` | 按查询建索引、先看执行计划 | [use-the-index-luke](https://use-the-index-luke.com/) |
+| `testing` | 测试金字塔、每个 bug 配回归测试 | [Fowler](https://martinfowler.com/articles/practical-test-pyramid.html) |
+| `code-review` | 评审看五件事、意见分两级 | [Google eng-practices](https://google.github.io/eng-practices/review/) |
+| `security` | 服务端校验、每个入口鉴权、密钥不进日志 | [OWASP Top 10](https://owasp.org/www-project-top-ten/) |
+| `observability` | 结构化日志、指标、可行动的告警 | [OpenTelemetry](https://opentelemetry.io/docs/) |
+| `technical-writing` | 一页只做一类（教程/操作/参考/解释） | [Diátaxis](https://diataxis.fr/) |
+| `web-performance` | 先量再优：LCP/INP/CLS | [HPBN](https://hpbn.co/) |
+
+匹配规则：任务上的 `tags` 优先；没写就看标题和简报里的关键词；**还看是谁在做**——豆包被要求对设计和动效负责，Qoder 对安全和结构，ZCode 对文案和文档，WorkBuddy 对实现。最多 4 条。
+
+闭环在评审那一端：评审任务会收到**实现者当初被要求遵守的那份清单**（最多 8 条），逐条判「做到了 / 没做到（指位置）/ 不适用」。这样"看看行不行"就变成了可执行的结论。
 
 项目专属条目放 `.dsh-team/knowledge/<id>.md`，同 id 覆盖内置条目：
 

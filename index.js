@@ -12,7 +12,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Team } from './lib/team.js';
-import { loadAll, select, render as renderKnowledge } from './lib/knowledge.js';
+import { loadAll, select, render as renderKnowledge, renderChecklist } from './lib/knowledge.js';
 import { ask, waitAnswer, waitAnyAnswer, ensureWorker, killApp, targets, processRunning, checkReady } from './lib/cdp.js';
 
 export const inject = ['tools', 'webServer'];
@@ -118,18 +118,43 @@ export function apply(ctx) {
    * Curated references for this task, rendered for the brief.
    *
    * "Make it look good" produces nothing; "look at this and here is how to apply
-   * it" changes the output. Entries are matched by task tags or by keywords in
-   * the task text, so authors do not have to remember to ask.
+   * it" changes the output. Entries are matched by task tags, by keywords in the
+   * task text, and by what this worker is accountable for.
    */
+  function knowledgeFor(board, task) {
+    const entries = loadAll(pluginRoot, board.dir);
+    return select(entries, {
+      tags: task.tags || [],
+      text: `${task.title} ${task.note || ''}`,
+      worker: task.worker,
+      limit: 4,
+    });
+  }
+
   function referenceText(board, task) {
     try {
-      const entries = loadAll(pluginRoot, board.dir);
-      const picked = select(entries, {
-        tags: task.tags || [],
-        text: `${task.title} ${task.note || ''}`,
-        limit: 4,
-      });
-      return renderKnowledge(picked);
+      return renderKnowledge(knowledgeFor(board, task));
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * For a review: the rules the reviewed artifact was supposed to follow.
+   *
+   * Collected from the upstream tasks' recorded entries, so the reviewer checks
+   * the same standard the implementer was given — not a fresh opinion.
+   */
+  function reviewChecklist(board, task) {
+    try {
+      const ids = new Set();
+      for (const dep of task.dependsOn || []) {
+        const upstream = team.findTask(board, dep);
+        for (const id of upstream.knowledgeEntries || []) ids.add(id);
+      }
+      if (!ids.size) return '';
+      const entries = loadAll(pluginRoot, board.dir).filter((entry) => ids.has(entry.id));
+      return renderChecklist(entries, { maxRules: 8 });
     } catch {
       return '';
     }
@@ -210,7 +235,16 @@ export function apply(ctx) {
       : '';
     delete task.pendingDiff;
     delete task.pendingSnapshot;
-    const references = task.pendingReferences ?? referenceText(board, task);
+    // A review gets the checklist the implementer was held to; everyone else gets
+    // the references that match their job.
+    let references;
+    if (task.review) {
+      references = reviewChecklist(board, task) || referenceText(board, task);
+    } else {
+      const picked = knowledgeFor(board, task);
+      task.knowledgeEntries = picked.map((entry) => entry.id);
+      references = renderKnowledge(picked);
+    }
     delete task.pendingReferences;
     if (snapshotDir) {
       task.snapshotDir = snapshotDir;
